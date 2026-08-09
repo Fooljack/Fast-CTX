@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $wrapper = Join-Path $scriptRoot 'run-latest-fast-patch.ps1'
+$wrapperText = Get-Content -LiteralPath $wrapper -Raw
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -73,6 +74,11 @@ if (-not $completeText.Contains('pending publish eligibility check')) {
 }
 if ($completeText.Contains("`$script:ArchiveResult = 'archived'")) {
   throw 'Complete-Run still reports archived before publication succeeds'
+}
+
+$finalCleanupPattern = '(?ms)\$finalArgs = @\(''-DryRun'', ''-ForceRebuild''\)\s*if \(-not \$KeepBuild\) \{\s*\$finalArgs \+= ''-CleanupAfter''\s*\}'
+if ([regex]::Matches($wrapperText, $finalCleanupPattern).Count -ne 2) {
+  throw 'both final Fast verification paths must clean their temporary MSIX build root unless -KeepBuild is explicit'
 }
 
 Write-Output 'Run-latest publish eligibility regression passed'

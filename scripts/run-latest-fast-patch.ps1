@@ -459,6 +459,9 @@ try {
     $MainScriptExitCode = 0
 
     $finalArgs = @('-DryRun', '-ForceRebuild')
+    if (-not $KeepBuild) {
+      $finalArgs += '-CleanupAfter'
+    }
     if (-not $SkipFastVerify) {
       $finalArgs += '-VerifyFastModeRequest'
     }
@@ -532,6 +535,9 @@ try {
   }
 
   $finalArgs = @('-DryRun', '-ForceRebuild')
+  if (-not $KeepBuild) {
+    $finalArgs += '-CleanupAfter'
+  }
   if (-not $SkipFastVerify) {
     $finalArgs += '-VerifyFastModeRequest'
   }
