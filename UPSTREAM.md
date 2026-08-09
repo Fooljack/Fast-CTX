@@ -1,0 +1,63 @@
+# Upstream And Fork Provenance
+
+This repository is a Windows-focused fork of FastCtx. It keeps the complete
+upstream source tree and Apache-2.0 attribution.
+
+- Upstream: `https://github.com/yc-duan/fastctx`
+- Upstream tag: `v0.2.4`
+- Upstream commit: `86dac0c99efae7859ed2be468f68c16e58f5e16a`
+- Upstream commit date: `2026-08-02`
+- Fork repository: `https://github.com/Fooljack/Fast-CTX`
+
+## Source Hardening
+
+The fork applies `docs/fastctx-local-hardening.patch` directly to the source.
+The patch changes these files:
+
+- `src/control/paths.rs`
+- `src/read_tool/batch.rs`
+- `src/read_tool/mod.rs`
+- `src/runtime/mod.rs`
+- `src/session.rs`
+- `tests/glob_contract.rs`
+- `tests/parent_watch_contract.rs`
+- `tests/read_contract.rs`
+
+The changes keep FastCtx state under the native Windows `USERPROFILE` when Git
+Bash exports a different `HOME`, allow repeated paths in one batch read as
+independent ranges, and treat Windows symlink error 1314 as an unavailable test
+capability on unelevated systems. The remaining test-only changes remove timing
+and formatting instability without changing tool behavior.
+
+## Windows Integration Layer
+
+The fork adds these files without mixing in the Codex Desktop MSIX repair chain:
+
+- `scripts/install-fastctx-windows.ps1`
+- `scripts/configure-fastctx.ps1`
+- `scripts/verify-fastctx-mcp.ps1`
+- `scripts/test-configure-fastctx-preserves-config.ps1`
+- `scripts/test-configure-fastctx-verify-read-only.ps1`
+- `docs/fastctx-windows-integration.md`
+- `checksums/SHA256SUMS`
+
+The installer does not run `fastctx apply` or `fastctx unapply`. It preserves
+unrelated Codex configuration and validates the bundled binary before copying it
+to the user's stable FastCtx path.
+
+## Updating From Upstream
+
+1. Fetch the latest upstream commit and record its exact SHA.
+2. Apply `docs/fastctx-local-hardening.patch` with `git apply --check` first.
+3. Review every patch conflict instead of forcing it.
+4. Run `cargo fmt --all -- --check` and `cargo test --locked` with a valid
+   `FASTCTX_BASH` on custom Git installations.
+5. Build `cargo build --locked --release`, replace the bundled Windows binary,
+   and regenerate `checksums/SHA256SUMS`.
+6. Run the configuration preservation test, the nine-tool MCP smoke, and the
+   one-click installer verification.
+7. Remove temporary source clones, Cargo targets, fixture directories, logs, and
+   test processes before committing.
+
+Do not delete `~/.fastctx/jobs`, user settings, Codex config backups, or runtime
+state belonging to active sessions as part of build cleanup.

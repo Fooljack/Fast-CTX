@@ -2,8 +2,10 @@
 param(
   [string]$FastCtxBinary,
   [string]$GitBash,
+  [string]$NativeHome = $env:USERPROFILE,
   [string]$CodexHome = (Join-Path $env:USERPROFILE '.codex'),
   [string]$FastCtxHome = (Join-Path $env:USERPROFILE '.fastctx'),
+  [string]$ExpectedSha256,
   [switch]$VerifyOnly,
   [switch]$ForceBinary
 )
@@ -173,6 +175,32 @@ function Get-TomlSectionBody {
   return $match.Groups['body'].Value
 }
 
+function Get-ConfiguredFastCtxBash {
+  param([Parameter(Mandatory = $true)][string]$ConfigPath)
+  if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+    return $null
+  }
+
+  $content = Read-Utf8NoBom $ConfigPath
+  try {
+    $environment = Get-TomlSectionBody -Content $content -Header '[mcp_servers.fastctx.env]'
+  } catch {
+    return $null
+  }
+  $match = [regex]::Match(
+    $environment,
+    '(?m)^\s*FASTCTX_BASH\s*=\s*(?<value>"(?:\\.|[^"\\])*")\s*(?:#.*)?$'
+  )
+  if (-not $match.Success) {
+    return $null
+  }
+  try {
+    return [string]($match.Groups['value'].Value | ConvertFrom-Json -ErrorAction Stop)
+  } catch {
+    throw "configured FASTCTX_BASH is not a valid TOML basic string: $ConfigPath"
+  }
+}
+
 function Assert-TomlValue {
   param(
     [Parameter(Mandatory = $true)][string]$Body,
@@ -230,13 +258,16 @@ function Assert-FastCtxMcpConfig {
 }
 
 function Write-MinimalFastCtxConfig {
-  param([Parameter(Mandatory = $true)][string]$Path)
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Version
+  )
   if (Test-Path -LiteralPath $Path -PathType Leaf) {
     return
   }
   $content = @"
 schema_version = 1
-last_seen_version = "0.2.4"
+last_seen_version = "$Version"
 tool_budget_epoch = 2
 language = "zh-CN"
 tier = "standard"
@@ -268,6 +299,21 @@ function Get-GitBashPath {
     $candidates.Add((Join-Path $gitRoot 'bin\bash.exe'))
     $candidates.Add((Join-Path $gitRoot 'usr\bin\bash.exe'))
   }
+  foreach ($registryPath in @(
+    'HKCU:\SOFTWARE\GitForWindows',
+    'HKLM:\SOFTWARE\GitForWindows',
+    'HKLM:\SOFTWARE\WOW6432Node\GitForWindows'
+  )) {
+    $installPath = (Get-ItemProperty -LiteralPath $registryPath -Name InstallPath -ErrorAction SilentlyContinue).InstallPath
+    if (-not [string]::IsNullOrWhiteSpace($installPath)) {
+      $candidates.Add((Join-Path $installPath 'bin\bash.exe'))
+      $candidates.Add((Join-Path $installPath 'usr\bin\bash.exe'))
+    }
+  }
+  if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    $candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\Git\bin\bash.exe'))
+    $candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\Git\usr\bin\bash.exe'))
+  }
   foreach ($programRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
     if (-not [string]::IsNullOrWhiteSpace($programRoot)) {
       $candidates.Add((Join-Path $programRoot 'Git\bin\bash.exe'))
@@ -276,7 +322,11 @@ function Get-GitBashPath {
 
   foreach ($candidate in ($candidates | Select-Object -Unique)) {
     if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-      return (Resolve-FullPath $candidate)
+      $resolved = Resolve-FullPath $candidate
+      $versionOutput = (& $resolved --version 2>&1 | Out-String)
+      if ($LASTEXITCODE -eq 0 -and $versionOutput -match 'GNU bash') {
+        return $resolved
+      }
     }
   }
   throw 'Git Bash was not found. Install Git for Windows or pass -GitBash <path>.'
@@ -361,6 +411,25 @@ function Install-FastCtxBinary {
       Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
   }
+}
+
+function Assert-BinarySha256 {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [string]$Expected
+  )
+  if ([string]::IsNullOrWhiteSpace($Expected)) {
+    return
+  }
+  $normalized = $Expected.Trim().ToUpperInvariant()
+  if ($normalized -notmatch '^[0-9A-F]{64}$') {
+    throw "invalid expected SHA-256: $Expected"
+  }
+  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToUpperInvariant()
+  if ($actual -cne $normalized) {
+    throw "FastCtx binary SHA-256 mismatch for $($Path): expected=$normalized actual=$actual"
+  }
+  Write-Log "binary SHA-256 verified: $actual"
 }
 
 function Invoke-FastCtxVersion {
@@ -566,16 +635,20 @@ function Set-FastCtxMcpConfig {
   Write-Log "updated only FastCtx MCP tables: $ConfigPath"
 }
 
-if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
-  throw 'USERPROFILE is required for a stable Windows FastCtx installation.'
+if ([string]::IsNullOrWhiteSpace($NativeHome)) {
+  throw 'NativeHome is required for a stable Windows FastCtx installation.'
 }
-  $nativeHome = Resolve-FullPath $env:USERPROFILE
+  $nativeHome = Resolve-FullPath $NativeHome
   $CodexHome = Resolve-FullPath $CodexHome
   $FastCtxHome = Resolve-FullPath $FastCtxHome
   $configPath = Join-Path $CodexHome 'config.toml'
   $fastctxConfigPath = Join-Path $FastCtxHome 'config.toml'
   $targetBinary = Join-Path $FastCtxHome 'bin\fastctx.exe'
-  $bash = Get-GitBashPath $GitBash
+  $bashOverride = $GitBash
+  if ($VerifyOnly -and [string]::IsNullOrWhiteSpace($bashOverride)) {
+    $bashOverride = Get-ConfiguredFastCtxBash -ConfigPath $configPath
+  }
+  $bash = Get-GitBashPath $bashOverride
   if ($VerifyOnly) {
     if (-not (Test-Path -LiteralPath $targetBinary -PathType Leaf)) {
       throw "stable FastCtx binary does not exist: $targetBinary"
@@ -583,17 +656,19 @@ if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
   } else {
     New-Item -ItemType Directory -Force -Path $CodexHome, $FastCtxHome | Out-Null
     $source = Resolve-FastCtxBinary
+    Assert-BinarySha256 -Path $source -Expected $ExpectedSha256
     Install-FastCtxBinary -Source $source -Destination $targetBinary
   }
   $binary = $targetBinary
-  [void](Invoke-FastCtxVersion $binary)
+  Assert-BinarySha256 -Path $binary -Expected $ExpectedSha256
+  $version = Invoke-FastCtxVersion $binary
 
   if ($VerifyOnly) {
     if (-not (Test-Path -LiteralPath $fastctxConfigPath -PathType Leaf)) {
       throw "FastCtx config does not exist: $fastctxConfigPath"
     }
   } else {
-    Write-MinimalFastCtxConfig $fastctxConfigPath
+    Write-MinimalFastCtxConfig -Path $fastctxConfigPath -Version $version
   }
   Invoke-TomlValidation $fastctxConfigPath
   if (-not $VerifyOnly) {

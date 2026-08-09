@@ -1,8 +1,0 @@
-interface:
-  display_name: "Codex Windows Fast Patch"
-  short_description: "Pull upstream scripts, harden, repatch, validate, record, and archive Windows Codex repairs."
-  brand_color: "#2563EB"
-  default_prompt: "Use $codex-windows-fast-patch to run scripts\\run-latest-fast-patch.ps1. It pulls latest scripts from the third-party upstream, preserves local wrappers, applies hardening, checks the Codex version, repairs Fast Mode, Chinese/i18n, plugin UI, Chrome/browser_use, and Computer Use, writes a run record, then archives the verified chain to the private report repository."
-
-policy:
-  allow_implicit_invocation: true
