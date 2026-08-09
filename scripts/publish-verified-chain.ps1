@@ -97,6 +97,52 @@ function Invoke-Git {
   }
 }
 
+function Get-GitHubOwnerFromRemote {
+  param([string]$RemoteUrl)
+
+  if ([string]::IsNullOrWhiteSpace($RemoteUrl)) {
+    return $null
+  }
+
+  $match = [regex]::Match(
+    $RemoteUrl.Trim(),
+    '(?i)github\.com(?::|/)(?<owner>[^/:\s]+)/[^/\s]+?(?:\.git)?/?$'
+  )
+  if (-not $match.Success) {
+    return $null
+  }
+  return $match.Groups['owner'].Value
+}
+
+function Ensure-RepositoryGitIdentity {
+  param(
+    [string]$RepoRoot,
+    [string]$RemoteUrl
+  )
+
+  $nameResult = Invoke-Git -RepoRoot $RepoRoot -Arguments @('config', '--get', 'user.name') -AllowFailure
+  $emailResult = Invoke-Git -RepoRoot $RepoRoot -Arguments @('config', '--get', 'user.email') -AllowFailure
+  $name = if ($nameResult.ExitCode -eq 0) { $nameResult.Output.Trim() } else { '' }
+  $email = if ($emailResult.ExitCode -eq 0) { $emailResult.Output.Trim() } else { '' }
+
+  if (-not [string]::IsNullOrWhiteSpace($name) -and -not [string]::IsNullOrWhiteSpace($email)) {
+    return
+  }
+
+  $owner = Get-GitHubOwnerFromRemote -RemoteUrl $RemoteUrl
+  if ([string]::IsNullOrWhiteSpace($owner)) {
+    throw 'Git author identity is missing and the GitHub remote owner could not be inferred; configure user.name and user.email for this repository'
+  }
+
+  if ([string]::IsNullOrWhiteSpace($name)) {
+    Invoke-Git -RepoRoot $RepoRoot -Arguments @('config', 'user.name', $owner) | Out-Null
+  }
+  if ([string]::IsNullOrWhiteSpace($email)) {
+    Invoke-Git -RepoRoot $RepoRoot -Arguments @('config', 'user.email', "$owner@users.noreply.github.com") | Out-Null
+  }
+  Write-Log "configured missing repository-local Git author fields from GitHub remote owner: $owner"
+}
+
 function Write-Utf8NoBom {
   param(
     [string]$Path,
@@ -235,6 +281,8 @@ if ($origin.ExitCode -ne 0) {
 } elseif ($origin.Output.Trim() -ne $ReportRemoteUrl) {
   Invoke-Git -RepoRoot $CheckoutRoot -Arguments @('remote', 'set-url', 'origin', $ReportRemoteUrl) | Out-Null
 }
+
+Ensure-RepositoryGitIdentity -RepoRoot $CheckoutRoot -RemoteUrl $ReportRemoteUrl
 
 Invoke-Git -RepoRoot $CheckoutRoot -Arguments @('add', '-A') | Out-Null
 $status = (Invoke-Git -RepoRoot $CheckoutRoot -Arguments @('status', '--porcelain')).Output

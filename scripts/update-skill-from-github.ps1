@@ -19,6 +19,7 @@ param(
     'scripts/test-computer-use-patcher-generation.ps1',
     'scripts/test-configure-fastctx-verify-read-only.ps1',
     'scripts/test-local-hardening-idempotence.ps1',
+    'scripts/test-publish-git-identity-fallback.ps1',
     'scripts/test-repatch-dry-run-cleanup-arguments.ps1',
     'scripts/test-run-latest-publish-eligibility.ps1',
     'references/fastctx-windows-integration.md',
