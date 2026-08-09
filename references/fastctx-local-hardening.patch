@@ -1,0 +1,350 @@
+diff --git a/src/control/paths.rs b/src/control/paths.rs
+index 706985c..7b8f88d 100644
+--- a/src/control/paths.rs
++++ b/src/control/paths.rs
+@@ -58,14 +58,14 @@ impl ControlPaths {
+ 
+     /// Builds control paths with an optional command-line Codex profile override.
+     pub fn discover_with_codex_home(codex_home: Option<PathBuf>) -> Result<Self, String> {
+-        let home = env::var_os("HOME")
+-            .filter(|value| !value.is_empty())
+-            .or_else(|| env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
+-            .map(PathBuf::from)
+-            .ok_or_else(|| {
+-                "Cannot determine the user home directory. Set HOME or USERPROFILE and retry."
+-                    .to_string()
+-            })?;
++        let home = preferred_home(
++            env::var_os("HOME").map(PathBuf::from),
++            env::var_os("USERPROFILE").map(PathBuf::from),
++        )
++        .ok_or_else(|| {
++            "Cannot determine the user home directory. Set HOME or USERPROFILE and retry."
++                .to_string()
++        })?;
+         let (codex_dir, source) = match codex_home {
+             Some(path) if path.as_os_str().is_empty() => {
+                 return Err("--codex-home requires a non-empty path.".to_string());
+@@ -111,6 +111,27 @@ impl ControlPaths {
+     }
+ }
+ 
++/// Selects the native user-home variable for the current platform.
++///
++/// Git for Windows commonly exports a POSIX `HOME` (and can even point it at its
++/// installation directory), while Windows applications consistently provide the
++/// native `USERPROFILE`. Using the native variable first keeps control-center,
++/// lock, job, and Codex paths stable when FastCtx is launched by Codex but runs
++/// shell commands through Git Bash.
++pub(crate) fn preferred_home(
++    home: Option<PathBuf>,
++    userprofile: Option<PathBuf>,
++) -> Option<PathBuf> {
++    #[cfg(windows)]
++    let candidates = [userprofile, home];
++    #[cfg(not(windows))]
++    let candidates = [home, userprofile];
++    candidates
++        .into_iter()
++        .flatten()
++        .find(|path| !path.as_os_str().is_empty())
++}
++
+ #[cfg(windows)]
+ fn installed_binary_name() -> &'static str {
+     "fastctx.exe"
+@@ -123,7 +144,7 @@ fn installed_binary_name() -> &'static str {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{CodexHomeSource, ControlPaths};
++    use super::{CodexHomeSource, ControlPaths, preferred_home};
+ 
+     #[test]
+     fn explicit_codex_profile_never_moves_fastctx_state() {
+@@ -136,4 +157,15 @@ mod tests {
+         assert_eq!(paths.fastctx_dir, home.join(".fastctx"));
+         assert_eq!(paths.codex_home_source, CodexHomeSource::Flag);
+     }
++
++    #[test]
++    fn home_selection_uses_the_native_windows_variable_when_both_are_present() {
++        let git_home = std::path::PathBuf::from("git-home");
++        let native_home = std::path::PathBuf::from("native-home");
++        let selected = preferred_home(Some(git_home.clone()), Some(native_home.clone()));
++        #[cfg(windows)]
++        assert_eq!(selected, Some(native_home));
++        #[cfg(not(windows))]
++        assert_eq!(selected, Some(git_home));
++    }
+ }
+diff --git a/src/read_tool/batch.rs b/src/read_tool/batch.rs
+index e7ac0b3..7a6a5a1 100644
+--- a/src/read_tool/batch.rs
++++ b/src/read_tool/batch.rs
+@@ -9,7 +9,6 @@ use crate::paths::{
+     canonical_existing, display_path, io_error_message, missing_read_file_message, parse_input_path,
+ };
+ use serde::Serialize;
+-use std::collections::HashSet;
+ use std::fs;
+ use std::io::Read;
+ 
+@@ -80,7 +79,6 @@ pub(super) fn read_text_files(mut request: ReadRequest) -> ToolResponse {
+ }
+ 
+ fn validate_entries(entries: &[BatchReadEntry]) -> Result<(), String> {
+-    let mut seen = HashSet::with_capacity(entries.len());
+     for entry in entries {
+         if entry.offset == Some(0) {
+             return Err("Invalid offset value: 0. Expected an integer >= 1.".to_string());
+@@ -88,29 +86,11 @@ fn validate_entries(entries: &[BatchReadEntry]) -> Result<(), String> {
+         if entry.limit == Some(0) {
+             return Err("Invalid limit value: 0. Expected an integer >= 1.".to_string());
+         }
+-        let parsed = parse_input_path(&entry.path);
+         if let Some(encoding) = entry.encoding.as_deref()
+             && let Err(rejection) = canonical_encoding_label(encoding)
+         {
+             return Err(rejection.message(""));
+         }
+-        // A relative entry is an existence problem, not a request-shape one, so it is
+-        // reported in its own segment and never discards its neighbors. Keeping it out
+-        // of canonicalization also stops it from resolving into a false duplicate.
+-        let key_path = if parsed.is_absolute() {
+-            canonical_existing(&parsed).unwrap_or(parsed)
+-        } else {
+-            parsed
+-        };
+-        let key = display_path(&key_path);
+-        #[cfg(windows)]
+-        let key = key.to_ascii_lowercase();
+-        if !seen.insert(key) {
+-            return Err(format!(
+-                "Duplicate path in files: {}. List each file once.",
+-                continuation_path(&entry.path)
+-            ));
+-        }
+     }
+     Ok(())
+ }
+diff --git a/src/read_tool/mod.rs b/src/read_tool/mod.rs
+index 7c8da90..98a107b 100644
+--- a/src/read_tool/mod.rs
++++ b/src/read_tool/mod.rs
+@@ -60,8 +60,9 @@ pub struct ReadRequest {
+     pub file_path: Option<String>,
+     /// Batch form: an array of {"path", "offset"?, "limit"?, "encoding"?} objects for
+     /// reading 1-32 text files in one call. Each entry behaves like a single-file text read;
+-    /// results are packed in request order. Mutually exclusive with file_path and with the
+-    /// top-level offset/limit/encoding/pages/pdf_mode/view parameters.
++    /// results are packed in request order. A path may appear more than once to read independent
++    /// line ranges. Mutually exclusive with file_path and with the top-level
++    /// offset/limit/encoding/pages/pdf_mode/view parameters.
+     #[schemars(length(min = 1, max = 32))]
+     pub files: Option<Vec<BatchReadEntry>>,
+     /// The 1-based line number to start reading from. Use for paging through large files.
+@@ -86,7 +87,8 @@ pub struct ReadRequest {
+ #[derive(Clone, Debug, Deserialize, JsonSchema)]
+ #[serde(deny_unknown_fields)]
+ pub struct BatchReadEntry {
+-    /// Absolute path of the text file. Both / and \ are accepted.
++    /// Absolute path of the text file. Both / and \ are accepted. The same path may appear in
++    /// multiple entries when each entry requests an independent line range.
+     pub path: String,
+     /// The 1-based line number to start reading from.
+     #[schemars(range(min = 1))]
+diff --git a/src/runtime/mod.rs b/src/runtime/mod.rs
+index bc468ce..8c9e1f7 100644
+--- a/src/runtime/mod.rs
++++ b/src/runtime/mod.rs
+@@ -137,19 +137,17 @@ async fn acquire_startup_lock(file: &File, path: &Path) -> Result<(), String> {
+ }
+ 
+ fn endpoint_for(environment: &SessionEnvironment) -> Result<LocalEndpoint, String> {
+-    let home = environment
+-        .var_os("HOME")
+-        .filter(|value| !value.is_empty())
+-        .or_else(|| {
+-            environment
+-                .var_os("USERPROFILE")
+-                .filter(|value| !value.is_empty())
+-        })
+-        .ok_or_else(|| {
++    let home = crate::control::paths::preferred_home(
++        environment.var_os("HOME").map(std::path::PathBuf::from),
++        environment
++            .var_os("USERPROFILE")
++            .map(std::path::PathBuf::from),
++    )
++    .ok_or_else(|| {
+             "Cannot determine the user home directory for the FastCtx control center. Set HOME or USERPROFILE and retry."
+                 .to_string()
+         })?;
+-    let home_hash = short_hash(&crate::session::native_bytes(&home), 12);
++    let home_hash = short_hash(&crate::session::native_bytes(home.as_os_str()), 12);
+     let build_id = effective_build_id(environment);
+     let id = format!("fastctx-engine-{home_hash}-{build_id}");
+     let preferred_runtime_directory = crate::edit::private_storage::control_center_directory();
+diff --git a/src/session.rs b/src/session.rs
+index d54d08e..32c3401 100644
+--- a/src/session.rs
++++ b/src/session.rs
+@@ -289,16 +289,11 @@ impl SessionContext {
+             let environment = SessionEnvironment::capture().unwrap_or_else(|_| {
+                 SessionEnvironment::new(PathBuf::from("."), std::env::vars_os().collect())
+             });
+-            let home = environment
+-                .var_os("HOME")
+-                .filter(|value| !value.is_empty())
+-                .or_else(|| {
+-                    environment
+-                        .var_os("USERPROFILE")
+-                        .filter(|value| !value.is_empty())
+-                })
+-                .map(PathBuf::from)
+-                .unwrap_or_else(|| environment.cwd().to_path_buf());
++            let home = crate::control::paths::preferred_home(
++                environment.var_os("HOME").map(PathBuf::from),
++                environment.var_os("USERPROFILE").map(PathBuf::from),
++            )
++            .unwrap_or_else(|| environment.cwd().to_path_buf());
+             let control_paths = ControlPaths::for_home(home);
+             let settings = FastCtxSettings::default();
+             let provider = crate::control::provider::detect_path(&control_paths.codex_config);
+@@ -425,19 +420,13 @@ pub(crate) fn temp_dir() -> PathBuf {
+ fn control_paths_from_environment(
+     environment: &SessionEnvironment,
+ ) -> Result<ControlPaths, String> {
+-    let home = environment
+-        .var_os("HOME")
+-        .filter(|value| !value.is_empty())
+-        .or_else(|| {
+-            environment
+-                .var_os("USERPROFILE")
+-                .filter(|value| !value.is_empty())
+-        })
+-        .map(PathBuf::from)
+-        .ok_or_else(|| {
+-            "Cannot determine the user home directory. Set HOME or USERPROFILE and retry."
+-                .to_string()
+-        })?;
++    let home = crate::control::paths::preferred_home(
++        environment.var_os("HOME").map(PathBuf::from),
++        environment.var_os("USERPROFILE").map(PathBuf::from),
++    )
++    .ok_or_else(|| {
++        "Cannot determine the user home directory. Set HOME or USERPROFILE and retry.".to_string()
++    })?;
+     let (codex_home, source) = match environment
+         .var_os("CODEX_HOME")
+         .filter(|value| !value.is_empty())
+diff --git a/tests/glob_contract.rs b/tests/glob_contract.rs
+index dd6635b..57ea7c6 100644
+--- a/tests/glob_contract.rs
++++ b/tests/glob_contract.rs
+@@ -366,7 +366,12 @@ fn create_directory_symlink(target: &std::path::Path, link: &std::path::Path) ->
+ fn create_windows_symlink(create: impl FnOnce() -> std::io::Result<()>) -> bool {
+     match create() {
+         Ok(()) => true,
+-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
++        Err(error)
++            if error.kind() == std::io::ErrorKind::PermissionDenied
++                || error.raw_os_error() == Some(1314) =>
++        {
++            false
++        }
+         Err(error) => panic!("failed to create test symlink: {error}"),
+     }
+ }
+diff --git a/tests/parent_watch_contract.rs b/tests/parent_watch_contract.rs
+index a136916..53ea422 100644
+--- a/tests/parent_watch_contract.rs
++++ b/tests/parent_watch_contract.rs
+@@ -212,8 +212,7 @@ fn stdin_eof_ends_inflight_foreground_work_promptly() {
+         let _ = server.wait();
+         terminate_process(&foreground);
+         panic!(
+-            "serve did not exit within {:?} after stdin EOF with an in-flight request",
+-            EOF_SHUTDOWN_DEADLINE
++            "serve did not exit within {EOF_SHUTDOWN_DEADLINE:?} after stdin EOF with an in-flight request"
+         );
+     };
+     let eof_delay = eof_started.elapsed();
+@@ -321,10 +320,7 @@ fn stdin_startup_read_error_is_not_reported_as_clean_eof() {
+     let Some(status) = wait_for_child_exit(&mut server, EOF_SHUTDOWN_DEADLINE) else {
+         let _ = server.kill();
+         let _ = server.wait();
+-        panic!(
+-            "serve did not report a startup stdin read error within {:?}",
+-            EOF_SHUTDOWN_DEADLINE
+-        );
++        panic!("serve did not report a startup stdin read error within {EOF_SHUTDOWN_DEADLINE:?}");
+     };
+     let mut stderr = String::new();
+     server
+diff --git a/tests/read_contract.rs b/tests/read_contract.rs
+index 8ee1c52..ddaadc2 100644
+--- a/tests/read_contract.rs
++++ b/tests/read_contract.rs
+@@ -253,21 +253,6 @@ fn batch_read_rejects_every_request_shape_error_before_file_processing() {
+         error_text(read_file(batch_request(vec![invalid_encoding]))),
+         "Invalid encoding value \"not-an-encoding\". Use a WHATWG encoding label such as \"gbk\", \"shift_jis\", \"big5\", \"euc-kr\", \"windows-1252\", \"utf-16le\", or \"utf-32le\"."
+     );
+-
+-    let duplicate = BatchReadEntry {
+-        path: normalized(&path).replace('/', "\\"),
+-        ..batch_entry(&path)
+-    };
+-    assert_eq!(
+-        error_text(read_file(batch_request(vec![
+-            batch_entry(&path),
+-            duplicate
+-        ]))),
+-        format!(
+-            "Duplicate path in files: {}. List each file once.",
+-            normalized(&path)
+-        )
+-    );
+ }
+ 
+ #[test]
+@@ -318,25 +303,22 @@ fn batch_read_accepts_the_full_thirty_two_entry_boundary() {
+     assert!(output.ends_with("(Complete: 32 files processed.)"));
+ }
+ 
+-#[cfg(windows)]
+ #[test]
+-fn batch_read_duplicate_detection_normalizes_windows_drive_case() {
++fn batch_read_accepts_repeated_paths_as_independent_line_ranges() {
+     let temp = tempfile::tempdir().unwrap();
+-    let path = temp.path().join("drive-case.txt");
+-    write(&path, b"value");
+-    let canonical = normalized(&path);
+-    let mut lower_drive = canonical.clone();
+-    lower_drive.replace_range(0..1, &canonical[..1].to_ascii_lowercase());
+-    let duplicate = BatchReadEntry {
+-        path: lower_drive.clone(),
+-        ..batch_entry(&path)
+-    };
++    let path = temp.path().join("ranges.txt");
++    write(&path, b"one\ntwo\nthree\nfour");
++    let mut first = batch_entry(&path);
++    first.limit = Some(2);
++    let mut second = batch_entry(&path);
++    second.offset = Some(3);
++
+     assert_eq!(
+-        error_text(read_file(batch_request(vec![
+-            batch_entry(&path),
+-            duplicate
+-        ]))),
+-        format!("Duplicate path in files: {lower_drive}. List each file once.")
++        text(read_file(batch_request(vec![first, second]))),
++        format!(
++            "=== {path} (lines 1-2 of 4) ===\n1\tone\n2\ttwo\n\n=== {path} (lines 3-4 of 4) ===\n3\tthree\n4\tfour\n\n(Partial: 1 of 2 files processed. Continue with files=[{{\"path\":\"{path}\",\"offset\":3}}].)",
++            path = normalized(&path)
++        )
+     );
+ }
+ 
