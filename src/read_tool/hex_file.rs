@@ -1,13 +1,15 @@
 //! Sixteen-byte paged hexadecimal view for any regular file.
 
 use super::DEFAULT_HEX_LINE_LIMIT;
-use crate::budget::{TokenBudget, assemble_text, estimate_tokens};
+use crate::budget::TokenBudget;
 use crate::model::ToolResponse;
 use crate::paths::io_error_message;
+use crate::render_plan::{LineRenderGraph, RenderPlanError};
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Arc;
 
 const BYTES_PER_LINE: u64 = 16;
 const HEX_COLUMN_WIDTH: usize = 48;
@@ -74,33 +76,92 @@ pub(super) fn read_hex_file(
         ));
     }
 
-    loop {
-        if rendered.is_empty() {
-            return ToolResponse::error(format!(
-                "{}={} is too small to return the required continuation note. Increase it and retry.",
-                budget.variable, budget.value
-            ));
-        }
-        let shown = rendered.len() as u64;
-        let last = offset_line + shown - 1;
-        let terminal = if last < total_lines {
-            format!(
-                "(Partial: {} of {total_lines} shown. Continue with offset={}.)",
-                line_span(offset_line, last),
-                last + 1
-            )
-        } else {
-            format!(
-                "(Complete: reached end of file; {} of {total_lines} shown.)",
-                line_span(offset_line, last)
-            )
+    render_hex_page(rendered, offset_line, total_lines, budget)
+}
+
+struct SelectedHexPage {
+    shown: usize,
+    terminal: String,
+    tokens: usize,
+}
+
+fn render_hex_page(
+    rendered: Vec<String>,
+    offset_line: u64,
+    total_lines: u64,
+    budget: TokenBudget,
+) -> ToolResponse {
+    let maximum = rendered.len();
+    let lines = rendered.into_iter().map(Arc::<str>::from).collect();
+    let mut graph = match LineRenderGraph::new(lines, None) {
+        Ok(graph) => graph,
+        Err(error) => return render_failure(error),
+    };
+    let selected =
+        match select_hex_prefix(&mut graph, maximum, offset_line, total_lines, budget.value) {
+            Ok(Some(selected)) => selected,
+            Ok(None) => return budget_too_small(budget),
+            Err(error) => return render_failure(error),
         };
-        let output = assemble_text(&rendered, &[terminal]);
-        if estimate_tokens(&output) <= budget.value {
-            return ToolResponse::text(output);
-        }
-        rendered.pop();
+    let SelectedHexPage {
+        shown,
+        terminal,
+        tokens,
+    } = selected;
+    let notes = [terminal];
+    match graph.finish(shown, &notes, tokens, budget.value, None) {
+        Ok(rendered) => ToolResponse::text(rendered.text),
+        Err(error) => render_failure(error),
     }
+}
+
+fn select_hex_prefix(
+    graph: &mut LineRenderGraph,
+    maximum: usize,
+    offset_line: u64,
+    total_lines: u64,
+    budget: usize,
+) -> Result<Option<SelectedHexPage>, RenderPlanError> {
+    for shown in (1..=maximum).rev() {
+        let last = offset_line + shown as u64 - 1;
+        let terminal = hex_terminal(offset_line, last, total_lines);
+        let notes = [&terminal];
+        let tokens = graph.probe_notes(shown, &notes, None)?;
+        if tokens <= budget {
+            return Ok(Some(SelectedHexPage {
+                shown,
+                terminal,
+                tokens,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn hex_terminal(first: u64, last: u64, total_lines: u64) -> String {
+    if last < total_lines {
+        format!(
+            "(Partial: {} of {total_lines} shown. Continue with offset={}.)",
+            line_span(first, last),
+            last + 1
+        )
+    } else {
+        format!(
+            "(Complete: reached end of file; {} of {total_lines} shown.)",
+            line_span(first, last)
+        )
+    }
+}
+
+fn render_failure(error: RenderPlanError) -> ToolResponse {
+    ToolResponse::error(format!("Internal hex rendering failure: {error}"))
+}
+
+fn budget_too_small(budget: TokenBudget) -> ToolResponse {
+    ToolResponse::error(format!(
+        "{}={} is too small to return the required continuation note. Increase it and retry.",
+        budget.variable, budget.value
+    ))
 }
 
 fn format_hex_line(offset: u64, bytes: &[u8]) -> String {
@@ -142,9 +203,11 @@ fn line_span(first: u64, last: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_hex_line, read_hex_file};
+    use super::{format_hex_line, hex_terminal, read_hex_file, select_hex_prefix};
     use crate::ToolContent;
-    use crate::budget::TokenBudget;
+    use crate::budget::{TokenBudget, assemble_text, estimate_tokens};
+    use crate::render_plan::LineRenderGraph;
+    use std::sync::Arc;
 
     #[test]
     fn full_and_partial_lines_keep_the_ascii_column_aligned() {
@@ -184,5 +247,58 @@ mod tests {
                     .to_string()
             )]
         );
+    }
+
+    #[test]
+    fn prefix_checkpoints_preserve_the_previous_budget_selection() {
+        let lines = (0..128)
+            .map(|index| format_hex_line(index * 16, b"0123456789ABCDEF"))
+            .collect::<Vec<_>>();
+
+        for (offset_line, total_lines) in [(1_u64, 129_u64), (9_999, 10_126)] {
+            for budget in [1_usize, 50, 100, 500, 1_000, 8_500] {
+                let expected = (1..=lines.len()).rev().find_map(|shown| {
+                    let last = offset_line + shown as u64 - 1;
+                    let terminal = hex_terminal(offset_line, last, total_lines);
+                    let output = assemble_text(&lines[..shown], &[terminal.clone()]);
+                    (estimate_tokens(&output) <= budget).then_some((shown, terminal))
+                });
+                let mut graph = LineRenderGraph::new(
+                    lines.iter().cloned().map(Arc::<str>::from).collect(),
+                    None,
+                )
+                .unwrap();
+                let selected =
+                    select_hex_prefix(&mut graph, lines.len(), offset_line, total_lines, budget)
+                        .unwrap()
+                        .map(|selected| (selected.shown, selected.terminal));
+                assert_eq!(selected, expected, "offset={offset_line}, budget={budget}");
+            }
+        }
+    }
+
+    #[test]
+    fn dense_hex_rendering_builds_one_linear_prefix_graph() {
+        let count = 20_000_usize;
+        let lines = (0..count)
+            .map(|index| Arc::<str>::from(format_hex_line(index as u64 * 16, b"0123456789ABCDEF")))
+            .collect::<Vec<_>>();
+        let expected_bytes = lines.iter().map(|line| line.len()).sum::<usize>();
+        let mut graph = LineRenderGraph::new(lines, None).unwrap();
+        let selected = select_hex_prefix(&mut graph, count, 1, count as u64 + 1, 1_000)
+            .unwrap()
+            .unwrap();
+        let notes = [selected.terminal];
+        let rendered = graph
+            .finish(selected.shown, &notes, selected.tokens, 1_000, None)
+            .unwrap();
+        assert!(estimate_tokens(&rendered.text) <= 1_000);
+
+        let metrics = graph.metrics();
+        assert_eq!(metrics.render_units_built, count);
+        assert_eq!(metrics.render_bytes_built, expected_bytes);
+        assert_eq!(metrics.full_tokenizer_calls, 1);
+        assert!(metrics.token_prefix_appends <= count.saturating_mul(2));
+        assert!(metrics.token_suffix_probes <= count);
     }
 }
