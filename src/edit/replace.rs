@@ -4,11 +4,12 @@ use super::document::TextDocument;
 use super::locks::{FilePathLock, PathIdentity};
 use super::{ReplaceRequest, ReplaceService, edit_token_budget, plural};
 use crate::budget::{
-    GLOBAL_TOKEN_BUDGET_ENV, assemble_text, estimate_tokens, tool_token_budget_for_required,
+    ExactPrefixCounter, GLOBAL_TOKEN_BUDGET_ENV, assemble_text, estimate_tokens,
+    tool_token_budget_for_required,
 };
 use crate::model::ToolResponse;
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use regex::{Captures, Regex, RegexBuilder};
+use regex::{Regex, RegexBuilder};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -106,15 +107,13 @@ pub(super) fn replace(
         );
     }
 
+    let dry_run = request.dry_run.unwrap_or(false);
     let mut analyzed = Vec::new();
     let mut skipped = Vec::new();
     let mut planning_failures = Vec::new();
     let mut seen_identities = BTreeMap::new();
     let mut total_matches = 0_usize;
-    let mut preview_slots = budget
-        .saturating_mul(4)
-        .saturating_add(32)
-        .clamp(1, MAX_STORED_PREVIEWS);
+    let mut preview_slots = preview_slot_limit(dry_run, budget);
     for candidate in candidates {
         let opened = open_candidate(
             &candidate.display,
@@ -225,7 +224,6 @@ pub(super) fn replace(
         ));
     }
 
-    let dry_run = request.dry_run.unwrap_or(false);
     let fallback_label = request
         .fallback_encoding
         .as_deref()
@@ -386,9 +384,19 @@ pub(super) fn replace(
     )
 }
 
+fn preview_slot_limit(dry_run: bool, budget: usize) -> usize {
+    if dry_run {
+        budget.min(MAX_STORED_PREVIEWS)
+    } else {
+        0
+    }
+}
+
 struct FileAnalysis {
     matches: usize,
     previews: Vec<String>,
+    #[cfg(test)]
+    preview_scan_bytes: usize,
 }
 
 fn analyze_file(
@@ -397,29 +405,103 @@ fn analyze_file(
     replacement: &str,
     preview_limit: usize,
 ) -> FileAnalysis {
+    let text = document.logical_text();
     let mut matches = 0_usize;
     let mut previews = Vec::new();
-    for captures in regex.captures_iter(document.logical_text()) {
-        let matched = captures.get(0).expect("every capture set has group zero");
-        let expanded = expand(&captures, replacement);
-        if matched.start() == matched.end() && expanded.is_empty() {
-            continue;
+    let mut tracker = PreviewTracker::new();
+
+    if is_fixed_replacement(replacement) {
+        for matched in regex.find_iter(text) {
+            record_analysis_match(
+                text,
+                matched,
+                replacement,
+                preview_limit,
+                &mut matches,
+                &mut previews,
+                &mut tracker,
+            );
         }
-        matches = matches.saturating_add(1);
-        if previews.len() < preview_limit {
-            let line = document.logical_text()[..matched.start()]
-                .bytes()
-                .filter(|byte| *byte == b'\n')
-                .count()
-                + 1;
-            previews.push(format!(
-                "{line}: {} -> {}",
-                preview_text(matched.as_str()),
-                preview_text(&expanded)
-            ));
+    } else {
+        let mut expanded = String::new();
+        for captures in regex.captures_iter(text) {
+            let matched = captures.get(0).expect("every capture set has group zero");
+            if matched.start() != matched.end() && previews.len() >= preview_limit {
+                matches = matches.saturating_add(1);
+                continue;
+            }
+            expanded.clear();
+            captures.expand(replacement, &mut expanded);
+            record_analysis_match(
+                text,
+                matched,
+                &expanded,
+                preview_limit,
+                &mut matches,
+                &mut previews,
+                &mut tracker,
+            );
         }
     }
-    FileAnalysis { matches, previews }
+
+    FileAnalysis {
+        matches,
+        previews,
+        #[cfg(test)]
+        preview_scan_bytes: tracker.scan_bytes,
+    }
+}
+
+struct PreviewTracker {
+    line: usize,
+    cursor: usize,
+    #[cfg(test)]
+    scan_bytes: usize,
+}
+
+impl PreviewTracker {
+    fn new() -> Self {
+        Self {
+            line: 1,
+            cursor: 0,
+            #[cfg(test)]
+            scan_bytes: 0,
+        }
+    }
+}
+
+fn record_analysis_match(
+    text: &str,
+    matched: regex::Match<'_>,
+    expanded: &str,
+    preview_limit: usize,
+    matches: &mut usize,
+    previews: &mut Vec<String>,
+    tracker: &mut PreviewTracker,
+) {
+    if matched.start() == matched.end() && expanded.is_empty() {
+        return;
+    }
+    *matches = matches.saturating_add(1);
+    if previews.len() >= preview_limit {
+        return;
+    }
+
+    let preview_region = &text[tracker.cursor..matched.start()];
+    tracker.line = tracker
+        .line
+        .saturating_add(preview_region.bytes().filter(|byte| *byte == b'\n').count());
+    tracker.cursor = matched.start();
+    #[cfg(test)]
+    {
+        tracker.scan_bytes = tracker.scan_bytes.saturating_add(preview_region.len());
+    }
+    previews.push(format!(
+        "{}: {} -> {}",
+        tracker.line,
+        preview_text(matched.as_str()),
+        preview_text(expanded)
+    ));
 }
 
 struct BuiltReplacement {
@@ -494,53 +576,122 @@ fn process_replacement(
     max_result_size_mib: u64,
     materialize: bool,
 ) -> Result<(ReplacementOutput, usize), String> {
-    let mut output = ReplacementOutput::new(document.original_bytes().len(), materialize);
-    let mut previous_raw = 0_usize;
-    let mut previous_logical = 0_usize;
-    let mut matches = 0_usize;
-    let mut result_ends_newline = false;
-    let mut raw_cursor = document.raw_offset_cursor()?;
-    for captures in regex.captures_iter(document.logical_text()) {
-        let matched = captures.get(0).expect("every capture set has group zero");
-        let expanded = expand(&captures, replacement);
-        if matched.start() == matched.end() && expanded.is_empty() {
-            continue;
-        }
-        let raw_start = raw_cursor.advance_to(matched.start())?;
-        let raw_end = raw_cursor.advance_to(matched.end())?;
-        output.extend(
-            &document.original_bytes()[previous_raw..raw_start],
-            &document.display_path(),
-            max_result_size_mib,
-        )?;
-        let unchanged = &document.logical_text()[previous_logical..matched.start()];
-        observe_tail(unchanged, &mut result_ends_newline);
-        let encoded = document.encode_for_target(&expanded)?;
-        output.extend(&encoded, &document.display_path(), max_result_size_mib)?;
-        observe_tail(&expanded, &mut result_ends_newline);
-        previous_raw = raw_end;
-        previous_logical = matched.end();
-        matches = matches.saturating_add(1);
-    }
-    output.extend(
-        &document.original_bytes()[previous_raw..],
-        &document.display_path(),
-        max_result_size_mib,
-    )?;
-    observe_tail(
-        &document.logical_text()[previous_logical..],
-        &mut result_ends_newline,
-    );
+    let mut pass = ReplacementPass::new(document, max_result_size_mib, materialize)?;
 
-    let newline = document.encode_for_target("\n")?;
-    if document.trailing_newline() && !result_ends_newline {
-        output.extend(&newline, &document.display_path(), max_result_size_mib)?;
-    } else if !document.trailing_newline() && result_ends_newline {
-        // With no original trailing newline, only encoded replacement text can introduce this
-        // final boundary, so the validation-only pass can prove the same suffix without bytes.
-        output.remove_suffix(&newline);
+    if is_fixed_replacement(replacement) {
+        let mut encoded = None;
+        for matched in regex.find_iter(document.logical_text()) {
+            if !is_effective_match(&matched, replacement) {
+                continue;
+            }
+            if encoded.is_none() {
+                encoded = Some(document.encode_for_target(replacement)?);
+            }
+            pass.push(matched, replacement, encoded.as_deref().unwrap())?;
+        }
+    } else {
+        let mut expanded = String::new();
+        for captures in regex.captures_iter(document.logical_text()) {
+            expanded.clear();
+            captures.expand(replacement, &mut expanded);
+            let matched = captures.get(0).expect("every capture set has group zero");
+            if !is_effective_match(&matched, &expanded) {
+                continue;
+            }
+            let encoded = document.encode_for_target(&expanded)?;
+            pass.push(matched, &expanded, &encoded)?;
+        }
     }
-    Ok((output, matches))
+
+    pass.finish()
+}
+
+struct ReplacementPass<'a> {
+    document: &'a TextDocument,
+    output: ReplacementOutput,
+    raw_cursor: super::document::RawOffsetCursor<'a>,
+    previous_raw: usize,
+    previous_logical: usize,
+    matches: usize,
+    result_ends_newline: bool,
+    path: String,
+    max_result_size_mib: u64,
+}
+
+impl<'a> ReplacementPass<'a> {
+    fn new(
+        document: &'a TextDocument,
+        max_result_size_mib: u64,
+        materialize: bool,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            document,
+            output: ReplacementOutput::new(document.original_bytes().len(), materialize),
+            raw_cursor: document.raw_offset_cursor()?,
+            previous_raw: 0,
+            previous_logical: 0,
+            matches: 0,
+            result_ends_newline: false,
+            path: document.display_path(),
+            max_result_size_mib,
+        })
+    }
+
+    fn push(
+        &mut self,
+        matched: regex::Match<'_>,
+        expanded: &str,
+        encoded: &[u8],
+    ) -> Result<(), String> {
+        debug_assert!(is_effective_match(&matched, expanded));
+        let raw_start = self.raw_cursor.advance_to(matched.start())?;
+        let raw_end = self.raw_cursor.advance_to(matched.end())?;
+        self.output.extend(
+            &self.document.original_bytes()[self.previous_raw..raw_start],
+            &self.path,
+            self.max_result_size_mib,
+        )?;
+        observe_tail(
+            &self.document.logical_text()[self.previous_logical..matched.start()],
+            &mut self.result_ends_newline,
+        );
+        self.output
+            .extend(encoded, &self.path, self.max_result_size_mib)?;
+        observe_tail(expanded, &mut self.result_ends_newline);
+        self.previous_raw = raw_end;
+        self.previous_logical = matched.end();
+        self.matches = self.matches.saturating_add(1);
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<(ReplacementOutput, usize), String> {
+        self.output.extend(
+            &self.document.original_bytes()[self.previous_raw..],
+            &self.path,
+            self.max_result_size_mib,
+        )?;
+        observe_tail(
+            &self.document.logical_text()[self.previous_logical..],
+            &mut self.result_ends_newline,
+        );
+
+        let newline = self.document.encode_for_target("\n")?;
+        if self.document.trailing_newline() && !self.result_ends_newline {
+            self.output
+                .extend(&newline, &self.path, self.max_result_size_mib)?;
+        } else if !self.document.trailing_newline() && self.result_ends_newline {
+            self.output.remove_suffix(&newline);
+        }
+        Ok((self.output, self.matches))
+    }
+}
+
+fn is_fixed_replacement(replacement: &str) -> bool {
+    !replacement.as_bytes().contains(&b'$')
+}
+
+fn is_effective_match(matched: &regex::Match<'_>, expanded: &str) -> bool {
+    matched.start() != matched.end() || !expanded.is_empty()
 }
 
 fn checked_result_size(
@@ -564,12 +715,6 @@ fn observe_tail(text: &str, ends_newline: &mut bool) {
     if !text.is_empty() {
         *ends_newline = text.ends_with('\n');
     }
-}
-
-fn expand(captures: &Captures<'_>, replacement: &str) -> String {
-    let mut expanded = String::new();
-    captures.expand(replacement, &mut expanded);
-    expanded
 }
 
 fn open_candidate(
@@ -869,9 +1014,19 @@ fn render_report(
     let truncated_terminal = append_terminal_clause(terminal, "list truncated, see the note above");
     let mut shown_lines = Vec::new();
     let mut shown_files = 0_usize;
+    let mut counter = ExactPrefixCounter::default();
     for group in groups {
         let start_len = shown_lines.len();
         for line in &group.lines {
+            let checkpoint = counter.checkpoint();
+            if !shown_lines.is_empty()
+                && let Err(error) = counter.append("\n", None)
+            {
+                return report_render_error(error);
+            }
+            if let Err(error) = counter.append(line, None) {
+                return report_render_error(error);
+            }
             shown_lines.push(line.clone());
             let mut trial_notes = vec![format!(
                 "(Note: showing {} of {} files; totals below cover all files.)",
@@ -880,8 +1035,13 @@ fn render_report(
             )];
             trial_notes.extend(extra_notes.iter().cloned());
             trial_notes.push(truncated_terminal.clone());
-            if estimate_tokens(&assemble_text(&shown_lines, &trial_notes)) > budget {
+            let tokens = match count_report_with_notes(&mut counter, true, &trial_notes) {
+                Ok(tokens) => tokens,
+                Err(error) => return report_render_error(error),
+            };
+            if tokens > budget {
                 shown_lines.pop();
+                counter = ExactPrefixCounter::from_checkpoint(&checkpoint);
                 break;
             }
         }
@@ -894,7 +1054,12 @@ fn render_report(
         )];
         trial_notes.extend(extra_notes.iter().cloned());
         trial_notes.push(truncated_terminal.clone());
-        if estimate_tokens(&assemble_text(&shown_lines, &trial_notes)) >= budget {
+        let tokens =
+            match count_report_with_notes(&mut counter, !shown_lines.is_empty(), &trial_notes) {
+                Ok(tokens) => tokens,
+                Err(error) => return report_render_error(error),
+            };
+        if tokens >= budget {
             break;
         }
     }
@@ -904,11 +1069,21 @@ fn render_report(
     )];
     truncated_notes.extend(extra_notes.iter().cloned());
     truncated_notes.push(truncated_terminal);
+    let incremental =
+        match count_report_with_notes(&mut counter, !shown_lines.is_empty(), &truncated_notes) {
+            Ok(tokens) => tokens,
+            Err(error) => return report_render_error(error),
+        };
     let output = assemble_text(&shown_lines, &truncated_notes);
-    if estimate_tokens(&output) <= budget {
+    let required = estimate_tokens(&output);
+    if required != incremental {
+        return ToolResponse::error(format!(
+            "Internal replacement report token count mismatch: incremental={incremental}, full={required}."
+        ));
+    }
+    if required <= budget {
         ToolResponse::text(output)
     } else {
-        let required = estimate_tokens(&output);
         if let Ok(expanded) = tool_token_budget_for_required(GLOBAL_TOKEN_BUDGET_ENV, required)
             && expanded.value > budget
         {
@@ -924,6 +1099,28 @@ fn render_report(
             "FASTCTX_TOKEN_BUDGET={budget} is too small to return the required status note. Increase it and retry."
         ))
     }
+}
+
+fn count_report_with_notes(
+    counter: &mut ExactPrefixCounter,
+    has_body: bool,
+    notes: &[String],
+) -> Result<usize, crate::budget::TokenCountError> {
+    let checkpoint = counter.checkpoint();
+    let mut suffix = String::new();
+    if !notes.is_empty() {
+        if has_body {
+            suffix.push_str("\n\n");
+        }
+        suffix.push_str(&notes.join("\n"));
+    }
+    counter.count_with_suffix(&checkpoint, &suffix, None)
+}
+
+fn report_render_error(error: crate::budget::TokenCountError) -> ToolResponse {
+    ToolResponse::error(format!(
+        "Internal replacement report rendering failed: {error}"
+    ))
 }
 
 fn issue_groups(issues: &[Issue], label: &str) -> Vec<ReportGroup> {
@@ -995,8 +1192,12 @@ fn short_issue(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze_file, build_regex, preview_text, validate_replacement_references};
+    use super::{
+        ReportGroup, analyze_file, build_regex, build_replacement, is_fixed_replacement,
+        preview_slot_limit, preview_text, render_report, validate_replacement_references,
+    };
     use crate::edit::{ReplaceRequest, document::TextDocument};
+    use crate::{ToolContent, budget::estimate_tokens};
 
     fn request(pattern: &str, replacement: &str) -> ReplaceRequest {
         ReplaceRequest {
@@ -1056,6 +1257,148 @@ mod tests {
     }
 
     #[test]
+    fn preview_slots_are_disabled_for_apply_and_bounded_by_dry_run_budget() {
+        assert_eq!(preview_slot_limit(false, usize::MAX), 0);
+        assert_eq!(preview_slot_limit(true, 1), 1);
+        assert_eq!(preview_slot_limit(true, 8_500), 8_500);
+        assert_eq!(preview_slot_limit(true, usize::MAX), 100_000);
+    }
+
+    #[test]
+    fn fixed_replacement_classification_matches_the_regex_engine_fast_path() {
+        for replacement in ["", "plain", "line\nbreak", "界"] {
+            assert!(is_fixed_replacement(replacement), "{replacement:?}");
+        }
+        for replacement in ["$", "$$", "$0", "${name}", "plain$value"] {
+            assert!(!is_fixed_replacement(replacement), "{replacement:?}");
+        }
+    }
+
+    #[test]
+    fn fixed_and_capture_paths_produce_identical_raw_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let cases = vec![
+            ("mixed.txt", b"prefix\r\nold\nsuffix\r\n".to_vec(), None),
+            ("no-trailing.txt", b"old".to_vec(), None),
+            ("trailing.txt", b"old\r\n".to_vec(), None),
+            (
+                "utf16.txt",
+                utf16le_with_bom("prefix\r\nold\r\nsuffix"),
+                None,
+            ),
+            (
+                "gbk.txt",
+                encode_legacy(encoding_rs::GBK, "中文前缀\r\nold\r\n中文后缀"),
+                Some("gbk"),
+            ),
+        ];
+        let regex = regex::Regex::new("(old)()").unwrap();
+
+        for (name, bytes, encoding) in cases {
+            let path = temp.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let document = TextDocument::open(path.to_str().unwrap(), encoding, 256).unwrap();
+            for (fixed, dynamic) in [("NEW", "NEW$2"), ("", "$2"), ("NEW\n", "NEW\n$2")] {
+                let fixed = build_replacement(&document, &regex, fixed, 256).unwrap();
+                let dynamic = build_replacement(&document, &regex, dynamic, 256).unwrap();
+                assert_eq!(fixed.bytes, dynamic.bytes, "{name}");
+                assert_eq!(fixed.matches, dynamic.matches, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_and_capture_paths_agree_for_zero_width_matches() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("zero-width.txt");
+        std::fs::write(&path, b"ab").unwrap();
+        let document = TextDocument::open(path.to_str().unwrap(), None, 256).unwrap();
+        let regex = regex::Regex::new("(x*)()").unwrap();
+
+        for (fixed, dynamic) in [("X", "X$2"), ("", "$2")] {
+            let fixed = build_replacement(&document, &regex, fixed, 256).unwrap();
+            let dynamic = build_replacement(&document, &regex, dynamic, 256).unwrap();
+            assert_eq!(fixed.bytes, dynamic.bytes);
+            assert_eq!(fixed.matches, dynamic.matches);
+        }
+    }
+
+    #[test]
+    fn dense_fixed_replacement_build_materializes_every_match_without_preview_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("dense-build.txt");
+        let source = (0..20_000)
+            .map(|index| format!("{index:05}: OLD_TOKEN tail\n"))
+            .collect::<String>();
+        std::fs::write(&path, &source).unwrap();
+        let document = TextDocument::open(path.to_str().unwrap(), None, 256).unwrap();
+        let regex = regex::Regex::new("OLD_TOKEN").unwrap();
+        let built = build_replacement(&document, &regex, "NEW_TOKEN", 256).unwrap();
+
+        assert_eq!(built.matches, 20_000);
+        assert_eq!(
+            built
+                .bytes
+                .windows(b"NEW_TOKEN".len())
+                .filter(|window| *window == b"NEW_TOKEN")
+                .count(),
+            20_000
+        );
+        assert!(
+            !built
+                .bytes
+                .windows(b"OLD_TOKEN".len())
+                .any(|window| window == b"OLD_TOKEN")
+        );
+    }
+
+    #[test]
+    fn truncated_reports_skip_oversized_groups_and_continue_with_later_files() {
+        let groups = vec![
+            ReportGroup {
+                lines: vec!["first".to_string(), "x".repeat(1_000)],
+            },
+            ReportGroup {
+                lines: vec!["second".to_string()],
+            },
+        ];
+        let terminal = "(Complete: dry run — 2 matches in 2 files; nothing written.)";
+        let response = render_report(&groups, terminal, &[], 70, true);
+        assert!(!response.is_error);
+        let [ToolContent::Text(text)] = response.content.as_slice() else {
+            panic!("expected text report")
+        };
+        assert!(text.contains("first"), "{text}");
+        assert!(!text.contains(&"x".repeat(1_000)), "{text}");
+        assert!(text.contains("second"), "{text}");
+        assert!(estimate_tokens(text) <= 70, "{text}");
+    }
+
+    #[test]
+    fn dense_preview_line_tracking_is_linear_and_preview_free_analysis_scans_no_lines() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("dense.txt");
+        let text = (0..10_000)
+            .map(|index| format!("line-{index:05} hit\n"))
+            .collect::<String>();
+        std::fs::write(&path, &text).unwrap();
+        let document = TextDocument::open(path.to_str().unwrap(), None, 256).unwrap();
+        let compiled = build_regex(&request("hit", "MISS")).unwrap();
+
+        let with_previews = analyze_file(&document, &compiled.regex, "MISS", usize::MAX);
+        assert_eq!(with_previews.matches, 10_000);
+        assert_eq!(with_previews.previews.len(), 10_000);
+        assert_eq!(with_previews.previews[0], "1: hit -> MISS");
+        assert_eq!(with_previews.previews[9_999], "10000: hit -> MISS");
+        assert!(with_previews.preview_scan_bytes <= text.len());
+
+        let without_previews = analyze_file(&document, &compiled.regex, "MISS", 0);
+        assert_eq!(without_previews.matches, 10_000);
+        assert!(without_previews.previews.is_empty());
+        assert_eq!(without_previews.preview_scan_bytes, 0);
+    }
+
+    #[test]
     fn preview_windows_are_single_line_and_character_bounded() {
         assert_eq!(preview_text("a\r\nb"), "a\\nb");
         assert_eq!(preview_text(&"界".repeat(161)).chars().count(), 161);
@@ -1071,5 +1414,19 @@ mod tests {
             super::checked_result_size(256 * 1024 * 1024, 1, "target", 256).unwrap_err(),
             "Refusing to write target: the result would be 256.0 MiB, over the 256 MiB safety limit. Narrow the pattern."
         );
+    }
+
+    fn utf16le_with_bom(text: &str) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in text.encode_utf16() {
+            bytes.extend(unit.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn encode_legacy(encoding: &'static encoding_rs::Encoding, text: &str) -> Vec<u8> {
+        let (bytes, _, had_errors) = encoding.encode(text);
+        assert!(!had_errors);
+        bytes.into_owned()
     }
 }

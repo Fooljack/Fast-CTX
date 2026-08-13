@@ -271,6 +271,21 @@ impl ValidatedFileEncoding {
         }
     }
 
+    /// Returns the encoded byte length without materializing common Unicode encodings.
+    pub(crate) fn encoded_fragment_len(&self, text: &str) -> Option<usize> {
+        match self.detected.kind {
+            EncodingKind::Utf32Le | EncodingKind::Utf32Be => text.chars().count().checked_mul(4),
+            EncodingKind::EncodingRs(encoding) if encoding == UTF_8 => Some(text.len()),
+            EncodingKind::EncodingRs(encoding) if encoding == UTF_16LE || encoding == UTF_16BE => {
+                text.encode_utf16().count().checked_mul(2)
+            }
+            EncodingKind::EncodingRs(encoding) if is_editable_stateless_encoding(encoding) => {
+                self.encode_fragment(text).map(|encoded| encoded.len())
+            }
+            EncodingKind::EncodingRs(_) => None,
+        }
+    }
+
     /// Returns the canonical file encoding for diagnostics and write-back metadata.
     pub(crate) fn encoding_label(&self) -> &'static str {
         self.detected.source_encoding.unwrap_or("UTF-8")

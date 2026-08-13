@@ -206,7 +206,11 @@ impl TextDocument {
     }
 
     pub(crate) fn encode_for_target(&self, logical_text: &str) -> Result<Vec<u8>, String> {
-        let text = logical_text.replace('\n', self.eol.as_str());
+        let text = if self.eol == EolStyle::Lf {
+            std::borrow::Cow::Borrowed(logical_text)
+        } else {
+            std::borrow::Cow::Owned(logical_text.replace('\n', self.eol.as_str()))
+        };
         self.validated.encode_fragment(&text).ok_or_else(|| {
             format!(
                 "Cannot write {}: the replacement text cannot be encoded as {}. Convert the file to UTF-8 externally or use replacement text representable in that encoding.",
@@ -257,17 +261,17 @@ impl RawOffsetCursor<'_> {
         while self.logical_offset < target {
             let end = next_char_boundary(logical, self.logical_offset, target, OFFSET_CHUNK_BYTES);
             let chunk = &logical[self.logical_offset..end];
-            let encoded = self
+            let encoded_len = self
                 .document
                 .validated
-                .encode_fragment(chunk)
+                .encoded_fragment_len(chunk)
                 .ok_or_else(|| {
                     format!(
                         "Internal edit failure: source encoding {} cannot reproduce unchanged text.",
                         self.document.encoding_label()
                     )
                 })?;
-            self.raw_offset = self.raw_offset.saturating_add(encoded.len());
+            self.raw_offset = self.raw_offset.saturating_add(encoded_len);
             for _ in chunk.bytes().filter(|byte| *byte == b'\n') {
                 if self
                     .document
