@@ -20,6 +20,30 @@ cargo test
 
 Please keep pull requests focused: one change per PR.
 
+## Verification
+
+Before opening a pull request, run the same locked checks used by CI. The release
+profile and the no-default-features run are separate checks because they exercise
+different dependency and optimization paths:
+
+```console
+cargo fmt --all -- --check
+cargo check --locked --all-targets
+cargo check --locked --no-default-features --all-targets
+cargo test --locked --all-features
+cargo test --locked --no-default-features
+cargo test --locked --release
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo clippy --locked --no-default-features --all-targets -- -D warnings
+git diff --check
+```
+
+On Windows, run `./scripts/drain-test-processes.ps1` between contract-test groups
+when a later Cargo invocation needs to replace a binary still held by a test
+process. Performance measurements should use a release build and the real MCP
+`serve` protocol; report the input, budget, samples, and variance rather than
+adding a machine-specific timing threshold to CI.
+
 ## License of contributions
 
 FastCtx is licensed under the Apache License 2.0.

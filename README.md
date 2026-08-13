@@ -253,6 +253,14 @@ Use the hex view for binary files:
 }
 ```
 
+Read responses are closed against the exact `o200k_base` token budget, including their dynamic continuation or completion note. Text reads stream and stop collecting once their bounded body budget is saturated; they preserve one-based offsets, line truncation, encoding notes, and the exact next cursor. Batch reads accept at most 32 entries, keep request order, and return a replayable per-file continuation array. The hex channel uses a fixed 2,000-line default window and builds one prefix checkpoint graph, probing only the short terminal suffix for each candidate before one final independent token-count verification. This avoids rebuilding and tokenizing the full shrinking hex response for every rejected prefix without changing the hex bytes, columns, offsets, limits, or `Partial`/`Complete` grammar.
+
+The response budget is a safety boundary, not a promise that every input fits in one call. Increase the relevant budget or follow the returned continuation when a response is too large. Text and shell display lines are capped at 2,000 characters; grep search and captured-match memory each have a 64 MiB safety limit; replacement input/result files default to 256 MiB and can be configured from 64 MiB through 4 GiB; traversal, candidate-file, PDF, and protocol limits remain enforced. These limits are independent of the exact accounting optimization.
+
+The optimized replacement path also recognizes a literal replacement with no capture references, scans matches incrementally, and encodes reusable replacement bytes once per file. Capture replacements retain the existing `$0`, `$1`, `${name}`, zero-width, `max_replacements`, encoding, and size-limit semantics. All writes still use same-directory atomic promotion with a revision/CAS check, preserve encoding/BOM/EOL, trailing-newline and untouched-byte fidelity, preserve symlink-target behavior, and reject hard-linked targets.
+
+The measurements for this work used the real MCP `serve` protocol and release binaries. On one Windows machine, a 64,000,000-byte binary (4,000,000 hex lines) changed hex-read medians from about 344 ms at budget 100 and 35.5 s at budget 1,000 before the checkpoint path to about 5.4 ms and 46.8 ms afterward; a budget-8,500 sample was about 398 ms. A separate 70 MiB text fixture measured about 55–59 ms across budgets 100–8,500, and a complete 32-file batch at budget 8,500 measured about 21 ms. These are reproducible scope samples, not universal Bash-parity claims, machine-independent thresholds, or guarantees for every filesystem, encoding, or workload. Concurrent runs are not promised to be bit-for-bit identical unless the caller separately enables and verifies the relevant deterministic conditions.
+
 ### `grep`
 
 `grep` uses the Rust regex engine from the ripgrep family:
