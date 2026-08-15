@@ -15,6 +15,10 @@
 https://github.com/Fooljack/Fast-CTX
 ```
 
+当前仓库是私有仓库。目标电脑必须已经拥有读取权限（例如已配置 GitHub 登录凭据或组织访问），
+`raw.githubusercontent.com` 与 Release 地址才能工作；只有将仓库另行设为公开时，单独一个链接
+才足以支持匿名安装，安装器不会收集凭据。
+
 Windows x64 上，智能体应先把引导脚本下载成文件，再执行；不要把远程
 PowerShell 直接通过管道传给 `Invoke-Expression`：
 

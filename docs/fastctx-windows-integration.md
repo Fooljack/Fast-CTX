@@ -27,6 +27,10 @@ cwd、环境变量、shell 开关和取消信号，不能跨会话假定 cwd。
 
 ## 只用仓库链接安装
 
+当前仓库是私有仓库。目标电脑必须已经拥有读取权限（例如已配置 GitHub 登录凭据或组织访问），
+`raw.githubusercontent.com` 与 Release 地址才能工作；只有将仓库另行设为公开时，单独一个链接
+才足以支持匿名安装，安装器不会收集凭据。
+
 把 `https://github.com/Fooljack/Fast-CTX` 交给智能体即可。智能体应先将
 `scripts/install-fastctx-from-github.ps1` 下载为本地文件，按宿主策略检查后执行，不要把
 远程 PowerShell 直接传给 `Invoke-Expression`：
