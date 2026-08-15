@@ -29,7 +29,7 @@ The bootstrap follows GitHub's latest stable Release download redirect (or an ex
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File $bootstrap -Tag v0.3.0
+  -File $bootstrap -Tag v0.3.1
 ```
 
 ## Prerequisites

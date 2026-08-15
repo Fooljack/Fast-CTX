@@ -91,7 +91,7 @@ function Assert-FlatPackageIntegrity {
   }
   if ($text.Contains("`r")) { throw 'release package SHA256SUMS must use LF line endings' }
   if ($text.Length -eq 0) { throw 'release package SHA256SUMS cannot be empty' }
-  $lines = @($text -split "`n", -1)
+  $lines = @($text -split "`n")
   if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') {
     $lines = @($lines[0..($lines.Count - 2)])
   }

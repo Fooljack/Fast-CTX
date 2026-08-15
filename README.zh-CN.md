@@ -32,7 +32,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap
 
 引导脚本会跟随 GitHub 的最新稳定 Release 下载重定向，只从构造出的 GitHub HTTPS
 地址下载 Windows ZIP 与 Release 级 `SHA256SUMS`，校验归档后调用包内安装器；它不调用
-受限流影响的 GitHub API。需要固定复现时传 `-Tag v0.3.0`，而不是跟随 `latest`。
+受限流影响的 GitHub API。需要固定复现时传 `-Tag v0.3.1`，而不是跟随 `latest`。
 
 手动安装时，从同一个 GitHub Release 下载
 `fastctx-x86_64-pc-windows-msvc.zip` 与 Release 级 `SHA256SUMS`。校验归档、解压，
