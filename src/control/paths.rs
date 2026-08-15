@@ -1,7 +1,8 @@
 //! Stable user-directory paths used by the control terminal.
 
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Origin of the effective Codex profile directory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,13 +102,28 @@ impl ControlPaths {
             jobs_dir: fastctx_dir.join("jobs"),
             installed_binary: fastctx_bin_dir.join(installed_binary_name()),
             codex_config: codex_dir.join("config.toml"),
-            codex_agents: codex_dir.join("AGENTS.md"),
+            codex_agents: effective_codex_agents_path(&codex_dir),
             home,
             fastctx_dir,
             fastctx_bin_dir,
             codex_dir,
             codex_home_source: source,
         }
+    }
+}
+
+/// Chooses the effective global Codex guidance file.
+///
+/// Codex uses a non-empty `AGENTS.override.md` in preference to `AGENTS.md`.
+/// An unreadable override remains the selected path so callers fail safely rather
+/// than silently editing a file that Codex will not discover.
+fn effective_codex_agents_path(codex_dir: &Path) -> PathBuf {
+    let override_path = codex_dir.join("AGENTS.override.md");
+    match fs::read_to_string(&override_path) {
+        Ok(content) if !content.trim().is_empty() => override_path,
+        Ok(_) => codex_dir.join("AGENTS.md"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => codex_dir.join("AGENTS.md"),
+        Err(_) => override_path,
     }
 }
 
@@ -144,7 +160,7 @@ fn installed_binary_name() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodexHomeSource, ControlPaths, preferred_home};
+    use super::{CodexHomeSource, ControlPaths, effective_codex_agents_path, preferred_home};
 
     #[test]
     fn explicit_codex_profile_never_moves_fastctx_state() {
@@ -156,6 +172,20 @@ mod tests {
         assert_eq!(paths.codex_config, profile.join("config.toml"));
         assert_eq!(paths.fastctx_dir, home.join(".fastctx"));
         assert_eq!(paths.codex_home_source, CodexHomeSource::Flag);
+    }
+
+    #[test]
+    fn nonempty_codex_override_is_the_effective_guidance_target() {
+        let root = std::env::temp_dir().join(format!("fastctx-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create path fixture");
+        let override_path = root.join("AGENTS.override.md");
+        let primary_path = root.join("AGENTS.md");
+        std::fs::write(&override_path, "override guidance\n").expect("write override");
+        assert_eq!(effective_codex_agents_path(&root), override_path);
+        std::fs::write(&override_path, "  \r\n").expect("blank override");
+        assert_eq!(effective_codex_agents_path(&root), primary_path);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

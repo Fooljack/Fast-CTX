@@ -19,44 +19,52 @@ const LEGACY_FASTREAD_SECTION: &str = concat!(
     "<!-- fastread:end -->"
 );
 const FILE_GUIDANCE: &str = concat!(
-    "## Local file inspection\n",
+    "## FastCtx tool routing\n",
     "\n",
-    "For reading, searching, and finding local files, prefer the FastCtx MCP\n",
-    "tools — `mcp__fastctx__read`, `mcp__fastctx__grep`, `mcp__fastctx__glob` —\n",
-    "over `cat`/`Get-Content`, `rg`/`findstr`/`Select-String`, and `dir`/`ls -R`.\n",
-    "Read only what the task needs. When you need several files, pass them to\n",
-    "one read call as files=[{\"path\": ...}, ...] instead of one call per file.\n",
-    "Pass absolute paths. The last line of every result says `Complete` or\n",
-    "`Partial` — continue only with the exact parameters a `Partial` note\n",
-    "provides.\n",
+    "For local file reads, content searches, and path searches, prefer the FastCtx MCP\n",
+    "tools — `mcp__fastctx__read`, `mcp__fastctx__grep`, and `mcp__fastctx__glob` —\n",
+    "over `cat`/`Get-Content`, `rg`/`findstr`/`Select-String`, and recursive\n",
+    "`dir`/`ls` traversal. Read only what the task needs. When you need several\n",
+    "files, pass them to one read call as `files=[{\"path\": ...}, ...]` instead of\n",
+    "making one call per file. Pass absolute paths. The last line of every result\n",
+    "says `Complete` or `Partial`; continue only with the exact parameters a\n",
+    "`Partial` note provides.\n",
     "\n",
-    "### Batch replacement\n",
+    "### Mechanical replacement\n",
     "\n",
-    "Use `mcp__fastctx__replace` for mechanical find-and-replace across files.\n",
-    "It preserves each file's encoding and line endings, supports dry-run previews,\n",
-    "and rejects concurrent changes before writing. Use apply_patch for generated\n",
-    "content, semantic rewrites, or small local edits.\n"
+    "Use `mcp__fastctx__replace` for mechanical find-and-replace across files. It\n",
+    "preserves each file's encoding and line endings, supports dry-run previews,\n",
+    "and rejects concurrent changes before writing.\n",
+    "\n",
+    "### Fallback boundary\n",
+    "\n",
+    "For the same operation goal supported by FastCtx, do not fall back to native\n",
+    "PowerShell or Bash until three consecutive, reasonable FastCtx attempts have\n",
+    "failed. Every retry must correct the command, path, arguments, or strategy\n",
+    "based on the previous failure. Never repeat an unchanged failing call merely\n",
+    "to reach three attempts. When falling back after the third corrected failure,\n",
+    "briefly state that FastCtx failed and why.\n",
+    "\n",
+    "Specialized host tools such as `apply_patch` remain exempt. Use them directly\n",
+    "for generated content, semantic rewrites, or small local edits; do not force\n",
+    "them through FastCtx.\n"
 );
 const SHELL_GUIDANCE: &str = concat!(
     "### Shell commands\n",
     "\n",
-    "Prefer `mcp__fastctx__run` over the built-in shell for terminal work: it\n",
-    "executes with bash (Git Bash on Windows), so always write POSIX bash —\n",
-    "never PowerShell syntax.\n",
+    "Prefer `mcp__fastctx__run` over the built-in shell for terminal work that\n",
+    "FastCtx can execute. It runs bash (Git Bash on Windows), so write POSIX bash,\n",
+    "not PowerShell syntax. Commands must be non-interactive; use flags such as\n",
+    "`-y` or `--no-edit`, and expect editors and pagers to be disabled. A non-zero\n",
+    "exit code is a normal result to diagnose, not by itself a reason to fall back.\n",
     "\n",
-    "Never pass `apply_patch` to `mcp__fastctx__run`: it is not a program and\n",
-    "no shell can run it. Reach it through Codex itself — as its own tool\n",
-    "call, or in Codex's built-in shell — never through the FastCtx tools.\n",
+    "Never pass `apply_patch` to `mcp__fastctx__run`; it is a specialized host tool,\n",
+    "not a shell program.\n",
     "\n",
-    "Commands must be non-interactive (no TTY): use flags like -y\n",
-    "or --no-edit, and expect editors/pagers to be disabled. For anything\n",
-    "that may outlast run's four-minute maximum, use\n",
-    "`mcp__fastctx__run_background`, check on it with\n",
-    "`mcp__fastctx__job_output`, and stop it with `mcp__fastctx__job_kill`.\n",
-    "Background jobs run independently of this session and survive restarts;\n",
-    "rediscover an earlier job with `mcp__fastctx__job_list` and read its\n",
-    "output by job_id. A non-zero exit code is a normal result. The last line\n",
-    "of every result says `Complete` or `Partial`.\n"
+    "For work that may outlast `run`'s four-minute maximum, use\n",
+    "`mcp__fastctx__run_background`, inspect it with `mcp__fastctx__job_output`, and\n",
+    "stop it with `mcp__fastctx__job_kill`. Background jobs survive client restarts;\n",
+    "rediscover them with `mcp__fastctx__job_list` and continue by `job_id`.\n"
 );
 /// Separator bytes inserted and therefore owned by Apply between user content and the private section.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -89,21 +97,30 @@ pub(crate) struct SectionEdit {
 /// model prefers these tools. Delimited by markers for idempotent replacement.
 pub const AGENTS_SECTION: &str = concat!(
     "<!-- fastctx:begin -->\n",
-    "## Local file inspection\n",
+    "## FastCtx tool routing\n",
     "\n",
-    "For reading, searching, and finding local files, prefer the FastCtx MCP\n",
-    "tools — `mcp__fastctx__read`, `mcp__fastctx__grep`, `mcp__fastctx__glob` —\n",
-    "over `cat`/`Get-Content`, `rg`/`findstr`/`Select-String`, and `dir`/`ls -R`.\n",
-    "Read only what the task needs. When you need several files, pass them to\n",
-    "one read call as files=[{\"path\": ...}, ...] instead of one call per file.\n",
-    "Pass absolute paths. The last line of every result says `Complete` or\n",
-    "`Partial` — continue only with the exact parameters a `Partial` note\n",
-    "provides.\n\n",
-    "### Batch replacement\n\n",
-    "Use `mcp__fastctx__replace` for mechanical find-and-replace across files.\n",
-    "It preserves each file's encoding and line endings, supports dry-run previews,\n",
-    "and rejects concurrent changes before writing. Use apply_patch for generated\n",
-    "content, semantic rewrites, or small local edits.\n",
+    "For local file reads, content searches, and path searches, prefer the FastCtx MCP\n",
+    "tools — `mcp__fastctx__read`, `mcp__fastctx__grep`, and `mcp__fastctx__glob` —\n",
+    "over `cat`/`Get-Content`, `rg`/`findstr`/`Select-String`, and recursive\n",
+    "`dir`/`ls` traversal. Read only what the task needs. When you need several\n",
+    "files, pass them to one read call as `files=[{\"path\": ...}, ...]` instead of\n",
+    "making one call per file. Pass absolute paths. The last line of every result\n",
+    "says `Complete` or `Partial`; continue only with the exact parameters a\n",
+    "`Partial` note provides.\n\n",
+    "### Mechanical replacement\n\n",
+    "Use `mcp__fastctx__replace` for mechanical find-and-replace across files. It\n",
+    "preserves each file's encoding and line endings, supports dry-run previews,\n",
+    "and rejects concurrent changes before writing.\n\n",
+    "### Fallback boundary\n\n",
+    "For the same operation goal supported by FastCtx, do not fall back to native\n",
+    "PowerShell or Bash until three consecutive, reasonable FastCtx attempts have\n",
+    "failed. Every retry must correct the command, path, arguments, or strategy\n",
+    "based on the previous failure. Never repeat an unchanged failing call merely\n",
+    "to reach three attempts. When falling back after the third corrected failure,\n",
+    "briefly state that FastCtx failed and why.\n\n",
+    "Specialized host tools such as `apply_patch` remain exempt. Use them directly\n",
+    "for generated content, semantic rewrites, or small local edits; do not force\n",
+    "them through FastCtx.\n",
     "<!-- fastctx:end -->"
 );
 
@@ -399,48 +416,8 @@ mod tests {
 
     #[test]
     fn shell_combinations_have_one_marker_pair_and_manifest_complete_guidance() {
-        let file = concat!(
-            "<!-- fastctx:begin -->\n",
-            "## Local file inspection\n\n",
-            "For reading, searching, and finding local files, prefer the FastCtx MCP\n",
-            "tools — `mcp__fastctx__read`, `mcp__fastctx__grep`, `mcp__fastctx__glob` —\n",
-            "over `cat`/`Get-Content`, `rg`/`findstr`/`Select-String`, and `dir`/`ls -R`.\n",
-            "Read only what the task needs. When you need several files, pass them to\n",
-            "one read call as files=[{\"path\": ...}, ...] instead of one call per file.\n",
-            "Pass absolute paths. The last line of every result says `Complete` or\n",
-            "`Partial` — continue only with the exact parameters a `Partial` note\n",
-            "provides.\n\n",
-            "### Batch replacement\n\n",
-            "Use `mcp__fastctx__replace` for mechanical find-and-replace across files.\n",
-            "It preserves each file's encoding and line endings, supports dry-run previews,\n",
-            "and rejects concurrent changes before writing. Use apply_patch for generated\n",
-            "content, semantic rewrites, or small local edits.\n",
-        );
-        let shell = concat!(
-            "\n### Shell commands\n\n",
-            "Prefer `mcp__fastctx__run` over the built-in shell for terminal work: it\n",
-            "executes with bash (Git Bash on Windows), so always write POSIX bash —\n",
-            "never PowerShell syntax.\n\n",
-            "Never pass `apply_patch` to `mcp__fastctx__run`: it is not a program and\n",
-            "no shell can run it. Reach it through Codex itself — as its own tool\n",
-            "call, or in Codex's built-in shell — never through the FastCtx tools.\n\n",
-            "Commands must be non-interactive (no TTY): use flags like -y\n",
-            "or --no-edit, and expect editors/pagers to be disabled. For anything\n",
-            "that may outlast run's four-minute maximum, use\n",
-            "`mcp__fastctx__run_background`, check on it with\n",
-            "`mcp__fastctx__job_output`, and stop it with `mcp__fastctx__job_kill`.\n",
-            "Background jobs run independently of this session and survive restarts;\n",
-            "rediscover an earlier job with `mcp__fastctx__job_list` and read its\n",
-            "output by job_id. A non-zero exit code is a normal result. The last line\n",
-            "of every result says `Complete` or `Partial`.\n",
-        );
-        let end = "<!-- fastctx:end -->";
-        for (fastshell, expected) in [
-            (false, format!("{file}{end}")),
-            (true, format!("{file}{shell}{end}")),
-        ] {
+        for fastshell in [false, true] {
             let actual = section(fastshell);
-            assert_eq!(actual, expected);
             assert_eq!(actual.matches(BEGIN_MARKER).count(), 1);
             assert_eq!(actual.matches(END_MARKER).count(), 1);
             let referenced = actual
@@ -454,6 +431,14 @@ mod tests {
                 .collect::<BTreeSet<_>>();
             assert_eq!(referenced, published);
             assert!(actual.contains("mcp__fastctx__replace"));
+            assert!(actual.contains("three consecutive, reasonable FastCtx attempts"));
+            assert!(
+                actual
+                    .contains("Every retry must correct the command, path, arguments, or strategy")
+            );
+            assert!(actual.contains("Never repeat an unchanged failing call"));
+            assert!(actual.contains("When falling back after the third corrected failure"));
+            assert!(actual.contains("Specialized host tools such as `apply_patch` remain exempt"));
             for forbidden in [
                 "will be told",
                 "will be notified",
@@ -465,14 +450,18 @@ mod tests {
                 assert!(!actual.contains(&format!("mcp__fastctx__{removed}")));
             }
         }
+        assert_eq!(section(false), AGENTS_SECTION);
+        assert_eq!(
+            section(true),
+            include_str!("../../assets/fastctx-agent-guidance.md")
+        );
     }
 
     /// Steering the model away from the built-in shell also steers it away from the
-    /// host's `apply_patch`, which is intercepted on that channel only and is not a
-    /// program the shell tool could ever resolve. The carve-out below is what keeps
-    /// the model from piping patches into `run` and getting `command not found`
-    /// (reported 2026-07-24); it is scoped to the shell section because without the
-    /// shell tools there is no wrong channel to warn about.
+    /// host's `apply_patch`, which is intercepted on a specialized channel and is not a
+    /// program the shell tool could ever resolve. The host-neutral carve-out below keeps
+    /// both Codex and Claude Code from piping patches into `run` and getting
+    /// `command not found` (reported 2026-07-24).
     #[test]
     fn shell_guidance_carves_apply_patch_out_of_the_run_tool() {
         let with_shell = section(true).replace('\n', " ");
@@ -481,16 +470,12 @@ mod tests {
             "{with_shell}"
         );
         assert!(
-            with_shell.contains("it is not a program and no shell can run it"),
+            with_shell.contains("it is a specialized host tool, not a shell program"),
             "{with_shell}"
         );
-        // Naming both host shapes is the point: the model must not have to work out which one
-        // it holds, and pinning only one of them would misdirect every session running the other.
+        assert!(!with_shell.contains("through Codex itself"), "{with_shell}");
         assert!(
-            with_shell.contains(
-                "Reach it through Codex itself — as its own tool call, or in Codex's built-in shell"
-            ),
-            "{with_shell}"
+            section(false).contains("Specialized host tools such as `apply_patch` remain exempt")
         );
         assert!(!section(false).contains("Never pass `apply_patch`"));
     }
@@ -524,7 +509,7 @@ mod tests {
         let original = b"before\n\n<!-- fastctx:begin -->\n### Bulk edits and moving code\nUse mcp__fastctx__copy then mcp__fastctx__paste.\n<!-- fastctx:end -->\nafter\n";
         let applied = apply_section(original).unwrap();
         let source = std::str::from_utf8(&applied).unwrap();
-        assert!(source.contains("### Batch replacement"));
+        assert!(source.contains("### Mechanical replacement"));
         assert!(source.contains("mcp__fastctx__replace"));
         assert!(!source.contains("mcp__fastctx__copy"));
         assert!(!source.contains("mcp__fastctx__paste"));

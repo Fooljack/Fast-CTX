@@ -698,6 +698,7 @@ fn server_command(home: &Path, cwd: &Path, event_log: &Path) -> Command {
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
+        .env("CODEX_HOME", home.join(".codex"))
         .env("LOCALAPPDATA", &local)
         .env("XDG_RUNTIME_DIR", &runtime)
         .env("TMPDIR", &temp)

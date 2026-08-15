@@ -8,28 +8,81 @@
 > included. Fork provenance and source-level changes are recorded in
 > [UPSTREAM.md](./UPSTREAM.md).
 
-## Fooljack Windows install for Codex
+## Windows install for Claude Code, Codex, and CC Switch
 
-On Windows x64, clone this repository and run:
+### Give an AI agent only this repository URL
 
-```powershell
-git clone https://github.com/Fooljack/Fast-CTX.git
-cd Fast-CTX
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\install-fastctx-windows.ps1"
+```text
+https://github.com/Fooljack/Fast-CTX
 ```
 
-The checkout includes a verified Windows x64 binary, so the default path does
-not require Node.js or Rust. Git for Windows and an existing Codex installation
-are required. To compile the same hardened source locally instead, add
-`-BuildFromSource`; that path requires Rust 1.88 or newer and cleans its temporary
-build directory when finished.
+On Windows x64, the agent should download the bootstrap script as a file and run
+it. It must not pipe remote PowerShell directly into `Invoke-Expression`:
 
-The installer backs up the existing Codex `config.toml`, updates only
-`[mcp_servers.fastctx]` and `[mcp_servers.fastctx.env]`, pins native Windows home
-paths and Git Bash, then performs real smoke calls through all nine MCP tools.
-It never runs `fastctx apply` or `fastctx unapply`. Restart Codex Desktop after a
-successful install. Read [the Windows integration guide](./docs/fastctx-windows-integration.md)
-for verification and fallback details.
+```powershell
+$bootstrap = Join-Path $env:TEMP 'install-fastctx-from-github.ps1'
+Invoke-WebRequest `
+  'https://raw.githubusercontent.com/Fooljack/Fast-CTX/main/scripts/install-fastctx-from-github.ps1' `
+  -OutFile $bootstrap
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap
+```
+
+The bootstrap follows GitHub's latest stable Release redirect, downloads exactly the
+Windows ZIP and Release-level `SHA256SUMS` from constructed HTTPS GitHub URLs,
+verifies the archive, and delegates to its packaged installer without calling the
+rate-limited GitHub API. Use `-Tag v0.3.0` to pin this release instead of following
+`latest`.
+
+For a manual installation, download `fastctx-x86_64-pc-windows-msvc.zip` and the
+Release-level `SHA256SUMS` from the same GitHub Release. Verify the archive,
+extract it, then run from the extracted directory:
+
+```powershell
+certutil -hashfile .\fastctx-x86_64-pc-windows-msvc.zip SHA256
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\install-fastctx-windows.ps1
+```
+
+The ZIP contains the prebuilt executable, installer/configuration scripts, exact
+Agent guidance, installation guide, license notices, and an internal
+`SHA256SUMS`; Rust, Cargo, and Node.js are not required. The installer authenticates every
+flat payload—including helpers and guidance—before executing packaged scripts. Git for Windows is
+required. Claude Code is required for its automatic user-scope registration; if
+you intentionally want only Codex and optional CC Switch integration, use
+`-SkipClaudeCode`.
+
+The installer publishes `~/.fastctx/bin/fastctx.exe`, preserves unrelated Codex
+TOML and user-authored Markdown, configures Claude Code through its supported
+user-scope MCP CLI, and applies the verified standard budgets (`54000`, `10800`,
+`5400`, `10800`, `5400`). It updates only the marker-delimited FastCtx block in
+Claude's effective global `CLAUDE.md` and Codex's effective
+`AGENTS.override.md`/`AGENTS.md`. A conflicting Claude/Codex MCP definition named
+`fastctx` stops installation unless `-ForceMcpRegistration` is explicit.
+Installation and `-VerifyOnly` both require the exact nine-tool manifest; normal
+installation also performs real smoke calls through all nine tools.
+
+When CC Switch is installed, the installer opens its official `ccswitch://`
+confirmation with FastCtx enabled for Claude, Codex, Gemini, Grok Build, OpenCode,
+and Hermes. CC Switch stores MCP servers globally rather than inside individual
+provider snapshots, so this one import remains active across provider switches.
+The installer never edits the CC Switch SQLite database or bypasses its security
+confirmation. Update CC Switch to v3.19.0 or newer, review the displayed command,
+arguments, and environment, then click **Import**. Use `-SkipCcSwitch` to opt out,
+`-NoLaunchCcSwitch` for a headless run, or `-RequireCcSwitch` to require a
+registered protocol handler.
+
+The managed Agent policy prefers FastCtx for supported local operations and
+permits native PowerShell/Bash fallback only after three consecutive reasonable
+FastCtx attempts fail, with each retry correcting the command, path, arguments,
+or strategy. Unchanged retries do not count, and specialized host tools such as
+`apply_patch` remain exempt.
+
+A repository checkout remains supported. Source compilation is never selected
+implicitly; request it with `-BuildFromSource` in a checkout with Rust 1.88 or
+newer. See [the release installation guide](./docs/install-windows-release.md)
+and [the Windows integration guide](./docs/fastctx-windows-integration.md) for
+the repository-link contract, checksums, host paths, conflict handling, CC Switch
+behavior, and fallback boundaries.
 
 ### Fast, context-efficient repository tools for AI agents.
 
@@ -46,7 +99,7 @@ fastctx
 
 The `fastctx` command opens the control terminal. Review the proposed changes, select **Apply**, then start a new ChatGPT / Codex session.
 
-FastCtx currently provides first-class setup for ChatGPT App and Codex CLI. Any MCP client can also register `fastctx serve` directly.
+FastCtx currently provides first-class setup for ChatGPT App and Codex CLI; the Windows Release installer also registers Claude Code at user scope. Any MCP client can also register `fastctx serve` directly.
 
 ## What FastCtx solves
 
@@ -172,7 +225,7 @@ max_file_size_mib = 512
 cargo install fastctx --locked
 ```
 
-GitHub Releases provides a zip archive for Windows x64 and executable-preserving tar.gz archives for Linux x64, macOS x64, and macOS arm64. Every archive includes the binary and license notices; verify it with the release's aggregate `SHA256SUMS`.
+GitHub Releases provides a zip archive for Windows x64 and executable-preserving tar.gz archives for Linux x64, macOS x64, and macOS arm64. Every archive has an internal `SHA256SUMS`, while the release-level `SHA256SUMS` authenticates the archives themselves. The Windows ZIP also contains the flat installer, configurator, nine-tool smoke test, Agent guidance template, and `INSTALL-WINDOWS.md`; it can be installed without a source checkout.
 
 ## Tools
 
@@ -429,7 +482,8 @@ FastCtx uses or manages these paths and settings:
 - `~/.fastctx/jobs/`: persistent background-job records and current-format full output logs, created on demand by `run_background`;
 - `[mcp_servers.fastctx]` in `~/.codex/config.toml`, including `tool_timeout_sec = 300`;
 - the `mcp__fastctx` entry in `direct_only_tool_namespaces`;
-- the marker-delimited FastCtx block in `~/.codex/AGENTS.md`;
+- the marker-delimited FastCtx block in Codex's effective global `AGENTS.override.md` or `AGENTS.md`;
+- on Windows installer deployments, Claude Code's user-scope MCP entry and the marker-delimited block in the effective global `CLAUDE.md` (`CLAUDE_CONFIG_DIR` is respected);
 - the selected `tool_output_token_limit` value after user confirmation.
 
 FastCtx edits existing TOML with `toml_edit`, preserving comments, formatting, and unrelated configuration. Unapply removes entries according to write ownership and preserves later user changes. It stops running background jobs before removing `~/.fastctx/`.

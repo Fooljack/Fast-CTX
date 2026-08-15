@@ -978,7 +978,10 @@ fn is_codex_config(change: &FileChange) -> bool {
 }
 
 fn is_codex_agents(change: &FileChange) -> bool {
-    change.target.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
+    matches!(
+        change.target.file_name().and_then(|name| name.to_str()),
+        Some("AGENTS.md") | Some("AGENTS.override.md")
+    )
 }
 
 /// Classifies a file change into preview semantics for TUI purpose text.

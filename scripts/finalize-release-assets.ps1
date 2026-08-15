@@ -3,6 +3,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-Sha256([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
 $root = Split-Path -Parent $PSScriptRoot
 $directory = Join-Path $root $ReleaseDirectory
 $expectedArchives = @(
@@ -28,7 +39,7 @@ if ((Compare-Object -ReferenceObject $expected -DifferenceObject $actual).Count 
 }
 
 $lines = foreach ($name in $expectedArchives) {
-    $hash = (Get-FileHash -LiteralPath (Join-Path $directory $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = Get-Sha256 (Join-Path $directory $name)
     "$hash  $name"
 }
 $content = ($lines -join "`n") + "`n"

@@ -89,9 +89,14 @@ foreach ($required in @(
     "finalize-release-assets.ps1",
     "verify-release-assets.ps1",
     "verify-release-identity.ps1 -TagName `$env:GITHUB_REF_NAME",
+    "test-github-bootstrap.ps1",
     "dist/release/*",
     "npm-tarballs-",
     "workflow_dispatch:",
+    "publish_npm:",
+    "inputs.publish_npm == true",
+    "startsWith(github.ref, 'refs/tags/v')",
+    "refusing to replace it automatically",
     "cargo install cargo-zigbuild --locked --version 0.23.0",
     "cargo zigbuild --locked --release --target `${{ matrix.zig_target }}",
     "x86_64-unknown-linux-gnu.2.31",
@@ -111,6 +116,12 @@ if (-not $releaseFinalizer.Contains("SHA256SUMS")) {
 }
 if ($releaseWorkflow.Contains(".sha256")) {
     throw "Release workflow must not create per-asset .sha256 sidecars"
+}
+if ($releaseWorkflow.Contains("gh release delete")) {
+    throw "Release workflow must never delete an existing GitHub Release automatically"
+}
+if ($releaseWorkflow -match '(?s)publish-npm:.*?if:\s*github\.event_name\s*==\s*''push''') {
+    throw "A release tag push must not publish npm packages without a separate manual opt-in"
 }
 if ($releaseWorkflow -match 'gh release (?:create|upload)[^\r\n]*dist/\*') {
     throw "GitHub Release upload must be restricted to dist/release, not all workflow artifacts"

@@ -31,12 +31,32 @@ $mapping = @{
     }
 }
 $licenseFiles = @("LICENSE-APACHE", "NOTICE", "THIRD_PARTY_LICENSES.md")
+$windowsFiles = [ordered]@{
+    "scripts/install-fastctx-windows.ps1" = "install-fastctx-windows.ps1"
+    "scripts/configure-fastctx.ps1" = "configure-fastctx.ps1"
+    "scripts/configure-ccswitch-fastctx.ps1" = "configure-ccswitch-fastctx.ps1"
+    "scripts/configure-agent-integrations.ps1" = "configure-agent-integrations.ps1"
+    "scripts/verify-fastctx-mcp.ps1" = "verify-fastctx-mcp.ps1"
+    "assets/fastctx-agent-guidance.md" = "fastctx-agent-guidance.md"
+    "docs/install-windows-release.md" = "INSTALL-WINDOWS.md"
+}
 $tarCommand = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
     [System.Runtime.InteropServices.OSPlatform]::Windows
 )) {
     Join-Path $env:SystemRoot "System32/tar.exe"
 } else {
     "tar"
+}
+
+function Get-Sha256([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
 }
 
 if (-not $mapping.ContainsKey($Target)) {
@@ -57,6 +77,28 @@ try {
         Copy-Item -LiteralPath (Join-Path $root $name) -Destination (Join-Path $stagingDirectory $name)
     }
 
+    $archiveEntries = @($entry.Binary) + $licenseFiles
+    if ($Target -eq "x86_64-pc-windows-msvc") {
+        foreach ($file in $windowsFiles.GetEnumerator()) {
+            $source = Join-Path $root $file.Key
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+                throw "Windows release installer file is missing: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $stagingDirectory $file.Value)
+            $archiveEntries += $file.Value
+        }
+    }
+
+    $checksumLines = foreach ($name in ($archiveEntries | Sort-Object)) {
+        "$(Get-Sha256 (Join-Path $stagingDirectory $name))  $name"
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $stagingDirectory "SHA256SUMS"),
+        (($checksumLines -join "`n") + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $archiveEntries += "SHA256SUMS"
+
     if ($entry.Format -eq "tar.gz") {
         chmod 755 (Join-Path $stagingDirectory $entry.Binary)
         if ($LASTEXITCODE -ne 0) {
@@ -65,7 +107,6 @@ try {
     }
 
     Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
-    $archiveEntries = @($entry.Binary) + $licenseFiles
     if ($entry.Format -eq "zip") {
         Compress-Archive `
             -LiteralPath ($archiveEntries | ForEach-Object { Join-Path $stagingDirectory $_ }) `
@@ -86,7 +127,7 @@ try {
     if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
         throw "Release archive was not created: $archivePath"
     }
-    Get-FileHash -LiteralPath $archivePath -Algorithm SHA256 | Format-List
+    Write-Output "SHA256 $((Get-Sha256 $archivePath).ToUpperInvariant()) $archivePath"
     Write-Output $archivePath
 } finally {
     Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
