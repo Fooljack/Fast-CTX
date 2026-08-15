@@ -45,7 +45,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap
 
 该引导器只接受规范的 `owner/repository` 名，跟随 GitHub 的最新稳定 Release 下载重定向，
 只从构造出的 GitHub HTTPS 地址获取精确命名的 Windows ZIP 与 Release 级 `SHA256SUMS`，
-校验归档后才解压并调用包内安装器，不调用受限流影响的 GitHub API。`-Tag v0.3.0` 可固定版本。
+校验归档后才解压并调用包内安装器，不调用受限流影响的 GitHub API。`-Tag v0.3.1` 可固定版本。
 
 ## 从 Release 手动安装
 

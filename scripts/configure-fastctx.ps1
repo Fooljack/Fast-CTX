@@ -285,7 +285,7 @@ function Get-TomlHeaderInfo {
 
 function Get-TomlDocumentSections {
   param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
-  $lines = @($Content -split "\r?\n", -1)
+  $lines = @($Content -split "\r?\n")
   $sections = New-Object System.Collections.Generic.List[object]
   for ($index = 0; $index -lt $lines.Count; $index++) {
     $header = Get-TomlHeaderInfo -Line $lines[$index]
@@ -417,7 +417,7 @@ function Update-TomlSection {
   $newline = Get-Newline $Content
   $hadTrailingNewline = $Content.EndsWith($newline)
   $lines = New-Object System.Collections.Generic.List[string]
-  foreach ($line in ($Content -split "\r?\n", -1)) {
+  foreach ($line in ($Content -split "\r?\n")) {
     $lines.Add($line)
   }
   if ($hadTrailingNewline -and $lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') {

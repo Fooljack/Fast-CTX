@@ -35,7 +35,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap
 The bootstrap follows GitHub's latest stable Release redirect, downloads exactly the
 Windows ZIP and Release-level `SHA256SUMS` from constructed HTTPS GitHub URLs,
 verifies the archive, and delegates to its packaged installer without calling the
-rate-limited GitHub API. Use `-Tag v0.3.0` to pin this release instead of following
+rate-limited GitHub API. Use `-Tag v0.3.1` to pin this release instead of following
 `latest`.
 
 For a manual installation, download `fastctx-x86_64-pc-windows-msvc.zip` and the
