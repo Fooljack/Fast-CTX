@@ -215,6 +215,11 @@ pub fn unapply(
     Ok(document.to_string().into_bytes())
 }
 
+/// Validates Codex TOML without mutating or normalizing it.
+pub fn validate(original: &[u8]) -> Result<(), String> {
+    parse(original).map(|_| ())
+}
+
 /// Reads the current integer tool_output_token_limit, returning None when absent, non-integer, or unparseable.
 /// Unapply uses this for ownership: restore the shared key only while it still equals the value written by Apply.
 pub fn current_token_limit(original: &[u8]) -> Option<i64> {

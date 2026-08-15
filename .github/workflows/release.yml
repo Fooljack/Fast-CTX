@@ -11,6 +11,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: 'Publish the prepared npm tarballs to npmjs.org (not needed for GitHub Release installation)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -245,6 +251,16 @@ jobs:
             -Target "${{ matrix.target }}" `
             -Binary "target/${{ matrix.target }}/release/${{ matrix.binary }}"
 
+      - name: Test flat Windows release installer
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: ./scripts/test-windows-release-installer.ps1 -Archive "dist/release/${{ matrix.archive }}"
+
+      - name: Test repository-link bootstrap offline
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: ./scripts/test-github-bootstrap.ps1 -Archive "dist/release/${{ matrix.archive }}"
+
       - name: Smoke-test Linux on glibc 2.31 and 2.35
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
@@ -372,29 +388,42 @@ jobs:
         run: |
           notes="$RUNNER_TEMP/fastctx-release-notes.md"
           cat > "$notes" <<'EOF'
-          ## FastCtx v0.2.4
+          ## FastCtx Windows installer and response-path performance
 
-          - **~90% less memory.** One shared control center per user instead of a full
-            server per session. Restart Codex after upgrading.
-          - **`replace` no longer stops at 64 MB.** The ceiling is now a setting, default
-            256 MB. Rewriting how offsets are tracked cut the memory a large edit needs by
-            roughly 10×, which is what makes the higher default safe; the control terminal
-            explains the memory trade-off before you raise it further. (#16)
-          - **`grep` no longer fails an entire search because of one file.** An oversized
-            line now skips that file and says so, instead of discarding every result
-            already collected.
-          - **Resource handling reverted to pre-0.2.2**, matching what other tool-only MCP
-            servers do. The trigger is in how Codex handles MCP resources; still under
-            observation. Run `fastctx apply` to refresh the AGENTS block.
-          - **No more compaction failures on non-official providers.**
-          - **Settings page**: output budgets move in quarter steps, an explicit save
-            button, and readable contrast on disabled values.
-          - **License is now Apache-2.0** (previously MIT OR Apache-2.0). Anyone
-            redistributing FastCtx or bundling it must reproduce the attribution notice in
-            `NOTICE` where third-party notices normally appear.
+          - **Repository-link bootstrap.** An agent given only
+            `https://github.com/Fooljack/Fast-CTX` can download the checked-in
+            bootstrap, resolve this repository's latest non-draft Release, authenticate
+            the Windows archive with the Release-level `SHA256SUMS`, and install without
+            cloning the source or compiling Rust.
+          - **Self-contained Windows x64 installation.** The Release ZIP includes the
+            prebuilt executable, checksum manifest, installer/configurators, exact
+            nine-tool smoke test, Agent guidance, and installation documentation. Rust
+            and a source checkout are not required.
+          - **Claude Code, Codex, and CC Switch integration.** The installer configures
+            Claude Code through its supported user-scope MCP CLI, preserves unrelated
+            Codex TOML, respects `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and
+            `AGENTS.override.md`, and refuses conflicting same-name MCP definitions unless
+            force is explicit. If CC Switch is installed, its official confirmation
+            imports FastCtx into Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes;
+            the installer never edits CC Switch SQLite or bypasses that confirmation.
+          - **Verified standard profile.** Direct hosts and the CC Switch payload receive
+            token budgets 54000 / 10800 / 5400 / 10800 / 5400 and the exact nine-tool
+            server command.
+          - **Managed Agent guidance.** Only the marker-delimited FastCtx block is
+            updated. The policy requires three consecutive corrected FastCtx failures
+            before native shell fallback; unchanged retries do not count and specialized
+            host tools remain exempt.
+          - **Linear response work.** Dense mechanical replacement and hex-read budget
+            closure avoid repeated whole-response construction while preserving atomic
+            writes, CAS checks, encoding/BOM/EOL fidelity, hard-link rejection, output
+            grammar, and exact token ceilings.
+          - **Release verification.** Every archive has an internal `SHA256SUMS`; the
+            release-level manifest authenticates all four archives, and CI installs and
+            verifies the extracted Windows ZIP before publication.
           EOF
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release delete "${GITHUB_REF_NAME}" --yes
+            echo "::error::GitHub Release ${GITHUB_REF_NAME} already exists; refusing to replace it automatically."
+            exit 1
           fi
           gh release create "${GITHUB_REF_NAME}" dist/release/* \
             --verify-tag \
@@ -408,7 +437,7 @@ jobs:
   publish-npm:
     name: Publish npm packages
     needs: publish-release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_npm == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read

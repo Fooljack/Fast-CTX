@@ -966,7 +966,7 @@ fn apply_status_and_unapply_cover_both_shell_states() {
         assert_eq!(agents.matches("<!-- fastctx:begin -->").count(), 1);
         assert_eq!(agents.matches("<!-- fastctx:end -->").count(), 1);
         assert_eq!(agents.contains("### Shell commands"), fastshell);
-        assert!(agents.contains("### Batch replacement"), "{agents}");
+        assert!(agents.contains("### Mechanical replacement"), "{agents}");
         assert!(agents.contains("mcp__fastctx__replace"), "{agents}");
         for removed in ["copy", "cut", "paste", "clips", "drop"] {
             assert!(!agents.contains(&format!("mcp__fastctx__{removed}")));
@@ -1024,7 +1024,7 @@ fn reapply_removes_a_disabled_shell_flag_from_the_single_server() {
     assert_eq!(config.matches("mcp__fastctx").count(), 1);
     let agents = std::fs::read_to_string(temp.path().join(".codex/AGENTS.md")).unwrap();
     assert!(!agents.contains("### Shell commands"));
-    assert!(agents.contains("### Batch replacement"));
+    assert!(agents.contains("### Mechanical replacement"));
     assert!(agents.contains("mcp__fastctx__replace"));
 }
 
@@ -1140,7 +1140,7 @@ fn apply_migrates_owned_three_server_config_and_legacy_agents_blocks_atomically(
     assert!(!agents.contains("<!-- fastread:begin -->"), "{agents}");
     assert_eq!(agents.matches("<!-- fastctx:begin -->").count(), 1);
     assert!(agents.contains("### Shell commands"), "{agents}");
-    assert!(agents.contains("### Batch replacement"), "{agents}");
+    assert!(agents.contains("### Mechanical replacement"), "{agents}");
     assert!(agents.contains("mcp__fastctx__replace"), "{agents}");
     assert!(!agents.contains("mcp__fastctx__copy"), "{agents}");
     assert!(!agents.contains("mcp__fastctx__paste"), "{agents}");

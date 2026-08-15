@@ -31,19 +31,32 @@ and formatting instability without changing tool behavior.
 
 ## Windows Integration Layer
 
-The fork adds these files without mixing in the Codex Desktop MSIX repair chain:
+The fork adds these files without mixing in unrelated Codex Desktop repair logic:
 
+- `assets/fastctx-agent-guidance.md`
 - `scripts/install-fastctx-windows.ps1`
 - `scripts/configure-fastctx.ps1`
+- `scripts/configure-agent-integrations.ps1`
+- `scripts/configure-ccswitch-fastctx.ps1`
+- `scripts/install-fastctx-from-github.ps1`
 - `scripts/verify-fastctx-mcp.ps1`
+- `scripts/test-agent-integrations.ps1`
+- `scripts/test-ccswitch-integration.ps1`
+- `scripts/test-github-bootstrap.ps1`
 - `scripts/test-configure-fastctx-preserves-config.ps1`
 - `scripts/test-configure-fastctx-verify-read-only.ps1`
+- `scripts/test-windows-release-installer.ps1`
+- `docs/install-windows-release.md`
 - `docs/fastctx-windows-integration.md`
 - `checksums/SHA256SUMS`
 
 The installer does not run `fastctx apply` or `fastctx unapply`. It preserves
-unrelated Codex configuration and validates the bundled binary before copying it
-to the user's stable FastCtx path.
+unrelated Codex configuration and user-authored global guidance, configures
+Claude Code through its supported user-scope MCP CLI, refuses conflicting
+same-name definitions unless force is explicit, and validates the prebuilt
+binary before copying it to the stable user path. The Windows Release archive
+contains the complete flat installer and an internal checksum manifest, so a
+source checkout or Rust toolchain is not required.
 
 ## Updating From Upstream
 
@@ -54,8 +67,9 @@ to the user's stable FastCtx path.
    `FASTCTX_BASH` on custom Git installations.
 5. Build `cargo build --locked --release`, replace the bundled Windows binary,
    and regenerate `checksums/SHA256SUMS`.
-6. Run the configuration preservation test, the nine-tool MCP smoke, and the
-   one-click installer verification.
+6. Run the configuration/guidance preservation tests, Claude conflict tests, the
+   nine-tool MCP smoke, release-asset verification, and the flat Windows ZIP
+   installation contract.
 7. Remove temporary source clones, Cargo targets, fixture directories, logs, and
    test processes before committing.
 

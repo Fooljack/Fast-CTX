@@ -107,6 +107,16 @@ enum Command {
         #[arg(long, hide = true)]
         maintenance_interval_ms: Option<u64>,
     },
+    /// Validate packaged installer TOML without mutating it.
+    #[command(hide = true)]
+    ValidateConfig {
+        /// FastCtx settings TOML to validate.
+        #[arg(long)]
+        fastctx_config: Option<PathBuf>,
+        /// Codex configuration TOML to validate.
+        #[arg(long)]
+        codex_config: Option<PathBuf>,
+    },
     /// Internal updater helper copied outside the active installation.
     #[command(hide = true)]
     UpdateHelper {
@@ -210,6 +220,10 @@ async fn run_cli(cli: Cli) -> Result<ExitCode, String> {
             crate::shell::jobs::run_watchdog_entry(pid, started)?;
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::ValidateConfig {
+            fastctx_config,
+            codex_config,
+        }) => run_validate_config(fastctx_config, codex_config),
         Some(Command::UpdateHelper {
             request,
             parent_pid,
@@ -233,6 +247,7 @@ fn is_internal_command(command: &Option<Command>) -> bool {
             Command::JobHost
                 | Command::RuntimeBootstrap
                 | Command::RuntimeHost { .. }
+                | Command::ValidateConfig { .. }
                 | Command::UpdateHelper { .. }
         )
     );
@@ -248,6 +263,28 @@ fn is_internal_command(command: &Option<Command>) -> bool {
     {
         common
     }
+}
+
+fn run_validate_config(
+    fastctx_config: Option<PathBuf>,
+    codex_config: Option<PathBuf>,
+) -> Result<ExitCode, String> {
+    if fastctx_config.is_none() && codex_config.is_none() {
+        return Err("validate-config requires --fastctx-config or --codex-config".to_string());
+    }
+    if let Some(path) = fastctx_config {
+        settings::load_from(&path)?;
+    }
+    if let Some(path) = codex_config {
+        let bytes = std::fs::read(&path).map_err(|error| {
+            format!(
+                "Cannot read Codex config {}: {error}",
+                crate::paths::display_path(&path)
+            )
+        })?;
+        crate::control::codex_config::validate(&bytes)?;
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_tui_with_check(paths: ControlPaths) -> Result<ExitCode, String> {

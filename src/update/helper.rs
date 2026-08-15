@@ -13,7 +13,7 @@ use semver::Version;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -26,6 +26,8 @@ use url::Url;
 pub(crate) const UPDATE_FINALIZE_ENV: &str = "FASTCTX_UPDATE_FINALIZE";
 /// Diagnostic passed only to a fallback TUI after an update failure.
 pub(crate) const UPDATE_FAILURE_ENV: &str = "FASTCTX_UPDATE_FAILURE";
+/// Private installer guard that suppresses startup cleanup during read-only verification.
+pub(crate) const READ_ONLY_VERIFY_ENV: &str = "FASTCTX_READ_ONLY_VERIFY";
 /// Private exit code telling the npm launcher to wait on its handoff marker.
 pub(crate) const NPM_LAUNCHER_WAIT_EXIT_CODE: u8 = 75;
 
@@ -271,10 +273,22 @@ pub(crate) fn begin_update(
 
 /// Removes rename-old artifacts once no previous Windows process still maps them.
 pub(crate) fn cleanup_replaced_binaries(paths: &ControlPaths) {
+    if read_only_verify_requested(std::env::var_os(READ_ONLY_VERIFY_ENV).as_deref()) {
+        return;
+    }
     if let Ok(current) = std::env::current_exe() {
         crate::control::leftovers::cleanup_stale_binary_siblings(&current);
     }
     crate::control::leftovers::cleanup_stale_binary_siblings(&paths.installed_binary);
+}
+
+fn read_only_verify_requested(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 /// Executes the hidden updater-helper command after the TUI process has exited.

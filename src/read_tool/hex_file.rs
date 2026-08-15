@@ -260,7 +260,7 @@ mod tests {
                 let expected = (1..=lines.len()).rev().find_map(|shown| {
                     let last = offset_line + shown as u64 - 1;
                     let terminal = hex_terminal(offset_line, last, total_lines);
-                    let output = assemble_text(&lines[..shown], &[terminal.clone()]);
+                    let output = assemble_text(&lines[..shown], std::slice::from_ref(&terminal));
                     (estimate_tokens(&output) <= budget).then_some((shown, terminal))
                 });
                 let mut graph = LineRenderGraph::new(

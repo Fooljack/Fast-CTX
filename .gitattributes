@@ -1,2 +1,4 @@
 tests/compat/v0_1_1/cases/**/expected.text -text
 tests/compat/v0_1_1/raw/** -text
+checksums/SHA256SUMS text eol=lf
+assets/fastctx-agent-guidance.md text eol=lf

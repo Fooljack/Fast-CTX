@@ -7,25 +7,73 @@
 > (`86dac0c99efae7859ed2be468f68c16e58f5e16a`)。仓库包含完整上游源码；上游来源、
 > 本地修改和验证边界见 [UPSTREAM.md](./UPSTREAM.md)。
 
-## Fooljack Codex Windows 一键安装
+## Claude Code、Codex 与 CC Switch 的 Windows 一键安装
 
-Windows x64 新电脑执行：
+### 只把这个仓库链接交给智能体
 
-```powershell
-git clone https://github.com/Fooljack/Fast-CTX.git
-cd Fast-CTX
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\install-fastctx-windows.ps1"
+```text
+https://github.com/Fooljack/Fast-CTX
 ```
 
-仓库内已附带校验过的 Windows x64 二进制，默认安装不需要 Node.js 或 Rust；需要已经
-安装 Git for Windows 和 Codex。希望从同一份增强源码本地编译时增加
-`-BuildFromSource`，该路径要求 Rust 1.88 或更高版本，并在完成后删除临时构建目录。
+当前仓库已经公开，智能体只需这个链接即可获取 raw bootstrap 和 Release 地址。如果使用私有
+fork，目标电脑必须已经拥有读取权限（例如已配置 GitHub 登录凭据或组织访问）；安装器不会
+收集凭据。
 
-安装器会先备份现有 Codex `config.toml`，只更新
-`[mcp_servers.fastctx]` 与 `[mcp_servers.fastctx.env]`，固定原生 Windows 用户目录和
-Git Bash 路径，然后真实调用全部九个 MCP 工具做 smoke。它不会执行
-`fastctx apply` 或 `fastctx unapply`。安装成功后重启 Codex Desktop。完整验证与降级
-边界见 [Windows 集成说明](./docs/fastctx-windows-integration.md)。
+Windows x64 上，智能体应先把引导脚本下载成文件，再执行；不要把远程
+PowerShell 直接通过管道传给 `Invoke-Expression`：
+
+```powershell
+$bootstrap = Join-Path $env:TEMP 'install-fastctx-from-github.ps1'
+Invoke-WebRequest `
+  'https://raw.githubusercontent.com/Fooljack/Fast-CTX/main/scripts/install-fastctx-from-github.ps1' `
+  -OutFile $bootstrap
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap
+```
+
+引导脚本会跟随 GitHub 的最新稳定 Release 下载重定向，只从构造出的 GitHub HTTPS
+地址下载 Windows ZIP 与 Release 级 `SHA256SUMS`，校验归档后调用包内安装器；它不调用
+受限流影响的 GitHub API。需要固定复现时传 `-Tag v0.3.0`，而不是跟随 `latest`。
+
+手动安装时，从同一个 GitHub Release 下载
+`fastctx-x86_64-pc-windows-msvc.zip` 与 Release 级 `SHA256SUMS`。校验归档、解压，
+然后在解压目录运行：
+
+```powershell
+certutil -hashfile .\fastctx-x86_64-pc-windows-msvc.zip SHA256
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\install-fastctx-windows.ps1
+```
+
+ZIP 已包含预编译 `fastctx.exe`、安装/配置脚本、精确 Agent 说明模板、安装说明、许可
+文件与包内 `SHA256SUMS`，不需要 Rust、Cargo 或 Node.js；必须安装 Git for Windows。
+默认通过 Claude Code 官方 CLI 写入用户级 MCP 定义；如果明确只需要 Codex 和可选的
+CC Switch 集成，可传 `-SkipClaudeCode`。
+
+安装器把二进制发布到 `~/.fastctx/bin/fastctx.exe`，保留 Codex TOML 与 Markdown 中
+非 FastCtx 内容，向 Claude Code 和 Codex 写入已验证的标准预算（`54000`、`10800`、
+`5400`、`10800`、`5400`）。它只更新全局说明文件中由
+`<!-- fastctx:begin -->` 与 `<!-- fastctx:end -->` 包围的区段，尊重
+`CLAUDE_CONFIG_DIR`，并优先选择非空 `AGENTS.override.md`。若已有不同的同名
+`fastctx` Claude/Codex MCP 定义，安装会停止；审查冲突后才可显式传
+`-ForceMcpRegistration`。安装和 `-VerifyOnly` 都要求精确九工具 manifest，正常安装
+还会真实调用全部九个工具。
+
+检测到 CC Switch 时，安装器会打开其官方 `ccswitch://` 确认框，并一次把 FastCtx
+启用到 Claude、Codex、Gemini、Grok Build、OpenCode 和 Hermes。CC Switch 把 MCP
+保存在独立的全局数据库中，而不是每个供应商快照里，因此只需导入一次，切换供应商时
+仍会重新投影 FastCtx；不应向每个供应商复制易漂移的 MCP 文本。安装器不会直接修改
+CC Switch SQLite，也不会绕过安全确认。建议先升级到 CC Switch v3.19.0 或更高版本，
+核对确认框中的命令、参数与环境后点击 **Import**。可用 `-SkipCcSwitch` 跳过、
+`-NoLaunchCcSwitch` 执行无界面安装，或用 `-RequireCcSwitch` 要求协议必须已注册。
+
+受管 Agent 规则要求：支持的本地操作优先使用 FastCtx；同一目标必须连续三次合理且
+每次根据上次错误修正命令、路径、参数或策略后仍失败，才可降级到原生 PowerShell 或
+Bash。原样重复失败调用不计数，`apply_patch` 等宿主专用工具明确豁免。
+
+仍可从仓库 checkout 安装，但不会隐式编译源码；只有在 Rust 1.88 或更高版本的
+checkout 中显式传 `-BuildFromSource` 才会编译。仓库链接安装合同、校验、路径、冲突、
+CC Switch 行为和降级边界见 [Release 安装说明](./docs/install-windows-release.md)与
+[Windows 集成说明](./docs/fastctx-windows-integration.md)。
 
 ### 面向 AI 智能体的快速、上下文高效的仓库工具。
 
@@ -40,7 +88,7 @@ fastctx
 
 `fastctx` 命令会打开控制终端。检查变更后选择 **Apply**，再启动新的 ChatGPT / Codex 会话即可使用。
 
-当前优先支持 ChatGPT App 与 Codex CLI。任何 MCP client 也可以直接注册 `fastctx serve`。
+当前优先支持 ChatGPT App 与 Codex CLI；Windows Release 安装器还会在用户级注册 Claude Code。任何 MCP client 也可以直接注册 `fastctx serve`。
 
 ## FastCtx 解决什么
 
@@ -166,7 +214,7 @@ max_file_size_mib = 512
 cargo install fastctx --locked
 ```
 
-GitHub Releases 为 Windows x64 提供 zip，为 Linux x64、macOS x64 和 macOS arm64 提供保留执行位的 tar.gz。每个归档都包含二进制与许可声明，并由 Release 的汇总 `SHA256SUMS` 校验。
+GitHub Releases 为 Windows x64 提供 zip，为 Linux x64、macOS x64 和 macOS arm64 提供保留执行位的 tar.gz。每个归档都有包内 `SHA256SUMS`，Release 级 `SHA256SUMS` 则校验归档本身。Windows ZIP 还包含扁平安装器、配置器、九工具 smoke、Agent 说明模板和 `INSTALL-WINDOWS.md`，无需源码 checkout 即可安装。
 
 ## 工具
 
@@ -419,7 +467,8 @@ FastCtx 使用或管理以下内容：
 - `~/.fastctx/jobs/`：由 `run_background` 按需创建的持久后台任务记录与当前格式完整输出日志；
 - `~/.codex/config.toml` 中的 `[mcp_servers.fastctx]`，其中包括 `tool_timeout_sec = 300`；
 - `direct_only_tool_namespaces` 中的 `mcp__fastctx` 元素；
-- `~/.codex/AGENTS.md` 中带边界标记的 FastCtx 段；
+- Codex 生效的全局 `AGENTS.override.md` 或 `AGENTS.md` 中带边界标记的 FastCtx 段；
+- 使用 Windows 安装器时，Claude Code 用户级 MCP 定义和生效全局 `CLAUDE.md` 中带边界标记的 FastCtx 段（尊重 `CLAUDE_CONFIG_DIR`）；
 - 用户确认后的 `tool_output_token_limit` 档位值。
 
 FastCtx 使用 `toml_edit` 修改已有 TOML，保留注释、格式和其他配置。Unapply 按写入所有权逐项撤销，用户后续改动会保留；删除 `~/.fastctx/` 前会先终止所有运行中的后台任务。
