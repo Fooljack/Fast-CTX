@@ -16,10 +16,10 @@
 https://github.com/Fooljack/Fast-CTX
 ```
 
-This repository is currently private. The target computer must already have permission to read it
-(for example, an authenticated GitHub credential or organization access) for the raw bootstrap and
-Release URLs to work. The link alone is sufficient for anonymous installation only if the repository
-is made public; the installer never collects credentials.
+This repository is public, so the raw bootstrap and Release URLs can be fetched with only this
+link. If you use a private fork, the target computer must already have permission to read it (for
+example, an authenticated GitHub credential or organization access); the installer never collects
+credentials.
 
 On Windows x64, the agent should download the bootstrap script as a file and run
 it. It must not pipe remote PowerShell directly into `Invoke-Expression`:
