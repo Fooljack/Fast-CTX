@@ -67,9 +67,21 @@ Installation and `-VerifyOnly` both require the exact nine-tool manifest; normal
 installation also performs real smoke calls through all nine tools.
 
 When CC Switch is installed, the installer opens its official `ccswitch://`
-confirmation with FastCtx enabled for Claude, Codex, Gemini, Grok Build, OpenCode,
-and Hermes. CC Switch stores MCP servers globally rather than inside individual
-provider snapshots, so this one import remains active across provider switches.
+confirmation with FastCtx enabled for Claude Code and Codex — the two applications
+this installer configures and verifies directly. CC Switch merges the application set
+as a union on import, so this default stays reversible: widening it later is one more
+import, while narrowing it is not. Pass `-CcSwitchApps` to opt into more of the
+MCP-capable set (`claude`, `codex`, `gemini`, `grokbuild`, `opencode`, `hermes`), for
+example `-CcSwitchApps 'claude,codex,gemini'`.
+
+The imported definition carries the same `startup_timeout_sec` and `tool_timeout_sec`
+values that the installer writes into `~/.codex/config.toml`. CC Switch keeps one
+shared specification per server id and rebuilds each application's MCP block from it,
+so these Codex-specific keys must travel in the import payload; applications that do
+not read them ignore them. CC Switch stores MCP servers globally rather than inside
+individual provider snapshots, so this one import remains active across provider
+switches.
+
 The installer never edits the CC Switch SQLite database or bypasses its security
 confirmation. Update CC Switch to v3.19.0 or newer, review the displayed command,
 arguments, and environment, then click **Import**. Use `-SkipCcSwitch` to opt out,

@@ -13,6 +13,7 @@ param(
   [switch]$ForceMcpRegistration,
   [switch]$SkipClaudeCode,
   [switch]$SkipCcSwitch,
+  [string]$CcSwitchApps,
   [switch]$NoLaunchCcSwitch,
   [switch]$RequireCcSwitch,
   [switch]$SkipMcpSmoke
@@ -239,6 +240,7 @@ try {
   if ($ClaudeCommand) { $commonParams.ClaudeCommand = $ClaudeCommand }
   if ($SkipClaudeCode) { $commonParams.SkipClaudeCode = $true }
   if ($SkipCcSwitch) { $commonParams.SkipCcSwitch = $true }
+  if ($CcSwitchApps) { $commonParams.CcSwitchApps = $CcSwitchApps }
   if ($NoLaunchCcSwitch) { $commonParams.NoLaunchCcSwitch = $true }
   if ($RequireCcSwitch) { $commonParams.RequireCcSwitch = $true }
   if ($ForceMcpRegistration) { $commonParams.ForceMcpRegistration = $true }
@@ -281,7 +283,7 @@ try {
   }
   Write-Log 'installation and verification passed; restart installed MCP clients to load FastCtx and global guidance'
   if (-not $SkipCcSwitch -and -not $NoLaunchCcSwitch) {
-    Write-Log 'if a CC Switch confirmation opened, review it and click Import to finish its six-application sync'
+    Write-Log 'if a CC Switch confirmation opened, review it and click Import to finish its application sync'
   }
 } finally {
   if ($temporaryRoot -and (Test-Path -LiteralPath $temporaryRoot)) {

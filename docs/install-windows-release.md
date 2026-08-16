@@ -70,15 +70,18 @@ The default installation:
 - inserts or updates only the `<!-- fastctx:begin -->` … `<!-- fastctx:end -->` block in effective global instruction files;
 - uses `CLAUDE_CONFIG_DIR` when set and a non-empty `AGENTS.override.md` before `AGENTS.md` for Codex;
 - runs an MCP initialize handshake and requires exactly `read`, `grep`, `glob`, `replace`, `run`, `run_background`, `job_list`, `job_output`, and `job_kill`;
-- when the `ccswitch://` protocol is registered, opens CC Switch's official import confirmation for Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes.
+- when the `ccswitch://` protocol is registered, opens CC Switch's official import confirmation for Claude Code and Codex, carrying the same `startup_timeout_sec` and `tool_timeout_sec` values written into `~/.codex/config.toml`.
 
-CC Switch keeps MCP servers in one application-level database and deliberately excludes them from individual provider snapshots. Importing once with all six application flags is therefore the correct way to keep FastCtx available while switching providers; copying MCP text into every provider would create stale duplicates. The installer never edits `~/.cc-switch/cc-switch.db` directly and never bypasses the CC Switch confirmation. Review the displayed `fastctx.exe serve --enable-shell` command and environment, then click **Import**. If an entry named `fastctx` already exists, CC Switch preserves that existing server definition while merging additional application flags; inspect or replace a stale entry in CC Switch before relying on it.
+CC Switch keeps MCP servers in one application-level database and deliberately excludes them from individual provider snapshots. Importing once is therefore the correct way to keep FastCtx available while switching providers; copying MCP text into every provider would create stale duplicates. Because CC Switch rebuilds each application's MCP block from that one shared specification, the Codex-only timeout keys must travel in the import payload — applications that do not read them ignore them. The default application set is `claude,codex`, matching what this installer configures and verifies directly; CC Switch merges the set as a union, so widening it later is one more import while narrowing it is not. The installer never edits `~/.cc-switch/cc-switch.db` directly and never bypasses the CC Switch confirmation. Review the displayed `fastctx.exe serve --enable-shell` command and environment, then click **Import**. If an entry named `fastctx` already exists, CC Switch preserves that existing server definition while merging additional application flags; inspect or replace a stale entry in CC Switch before relying on it.
 
 CC Switch controls:
 
 ```powershell
 # Configure Claude Code and Codex but do not involve CC Switch
 .\install-fastctx-windows.ps1 -SkipCcSwitch
+
+# Import into more of the MCP-capable applications
+.\install-fastctx-windows.ps1 -CcSwitchApps 'claude,codex,gemini'
 
 # Validate/generate the CC Switch payload without opening another application
 .\install-fastctx-windows.ps1 -NoLaunchCcSwitch

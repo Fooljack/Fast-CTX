@@ -149,7 +149,14 @@ Codex 的有效全局说明按其发现顺序选择：
 CC Switch 的 MCP 单一真源是 `~/.cc-switch/cc-switch.db` 中的全局 MCP 表；供应商快照会
 主动剥离 MCP，切换供应商后再从该表投影。因此安装器不会向每个供应商配置复制一份
 FastCtx，也不会直接改 SQLite。检测到注册的 `ccswitch://` 协议时，它使用官方深链导入
-一项 `fastctx`，并同时启用 `claude,codex,gemini,grokbuild,opencode,hermes`。
+一项 `fastctx`，默认启用 `claude,codex`——正是本安装器直接配置并验证的两个应用。
+
+由于 CC Switch 每个服务器只保留一份共享定义，并据此重建各应用的 MCP 配置块，深链载荷
+必须携带 `startup_timeout_sec` 与 `tool_timeout_sec`，取值与写入 `~/.codex/config.toml`
+的规范档一致；不读取这两个键的应用会自动忽略。导入时应用集合按并集合并，所以默认取窄
+是可逆方向：之后想扩大只需再导入一次，而收窄做不到。用 `-CcSwitchApps` 可显式扩大到
+MCP 可用集合（`claude`、`codex`、`gemini`、`grokbuild`、`opencode`、`hermes`），例如
+`-CcSwitchApps 'claude,codex,gemini'`。
 
 CC Switch 必须显示导入确认；安装器不能也不会自动点击确认。建议使用 v3.19.0 或更高
 版本，让确认框完整显示命令、参数和环境并对凭据形态值脱敏。用户应核对稳定二进制、
@@ -157,6 +164,7 @@ CC Switch 必须显示导入确认；安装器不能也不会自动点击确认�
 原服务器定义，只合并新增应用开关，因此陈旧定义应先在 CC Switch 中检查或删除。
 
 - `-SkipCcSwitch`：完全跳过 CC Switch；
+- `-CcSwitchApps`：指定导入的应用集合，默认 `claude,codex`；
 - `-NoLaunchCcSwitch`：生成并验证载荷，但不打开外部应用；
 - `-RequireCcSwitch`：没有注册协议时失败；
 - `-VerifyOnly`：只报告协议是否注册，不读取或写入 CC Switch 数据库。

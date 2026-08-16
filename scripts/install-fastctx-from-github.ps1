@@ -12,6 +12,7 @@ param(
   [switch]$ForceBinary,
   [switch]$ForceMcpRegistration,
   [switch]$SkipClaudeCode,
+  [string]$CcSwitchApps,
   [switch]$SkipCcSwitch,
   [switch]$NoLaunchCcSwitch,
   [switch]$RequireCcSwitch,
@@ -170,6 +171,7 @@ try {
   if ($GitBash) { $parameters.GitBash = $GitBash }
   if ($ClaudeConfigDir) { $parameters.ClaudeConfigDir = $ClaudeConfigDir }
   if ($ClaudeCommand) { $parameters.ClaudeCommand = $ClaudeCommand }
+  if ($CcSwitchApps) { $parameters.CcSwitchApps = $CcSwitchApps }
   foreach ($name in @(
     'VerifyOnly', 'ForceBinary', 'ForceMcpRegistration', 'SkipClaudeCode',
     'SkipCcSwitch', 'NoLaunchCcSwitch', 'RequireCcSwitch', 'SkipMcpSmoke'

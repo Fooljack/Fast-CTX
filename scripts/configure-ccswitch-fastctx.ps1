@@ -4,6 +4,7 @@ param(
   [Parameter(Mandatory = $true)][string]$GitBash,
   [Parameter(Mandatory = $true)][string]$NativeHome,
   [Parameter(Mandatory = $true)][string]$CodexHome,
+  [string]$Apps = 'claude,codex',
   [switch]$NoLaunch,
   [switch]$RequireCcSwitch,
   [switch]$PreflightOnly,
@@ -13,7 +14,34 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $LogPrefix = '[fastctx-ccswitch]'
-$TargetApps = 'claude,codex,gemini,grokbuild,opencode,hermes'
+
+# Canonical order of the MCP-capable CC Switch applications. Import links are emitted in
+# this order so the same -Apps set always produces the same deep link.
+$KnownApps = @('claude', 'codex', 'gemini', 'grokbuild', 'opencode', 'hermes')
+$AppDisplayNames = @{
+  claude = 'Claude Code'
+  codex = 'Codex'
+  gemini = 'Gemini'
+  grokbuild = 'Grok Build'
+  opencode = 'OpenCode'
+  hermes = 'Hermes'
+}
+
+$requestedApps = @(
+  $Apps.Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }
+)
+if ($requestedApps.Count -eq 0) {
+  throw '-Apps must name at least one CC Switch application.'
+}
+$unknownApps = @($requestedApps | Where-Object { $KnownApps -notcontains $_ })
+if ($unknownApps.Count -gt 0) {
+  throw "unsupported CC Switch application(s): $($unknownApps -join ', '). Supported: $($KnownApps -join ', ')."
+}
+# CC Switch merges the app set as a union on import, so a narrow default is the reversible
+# direction: widening later is one more import, narrowing is not.
+$TargetAppList = @($KnownApps | Where-Object { $requestedApps -contains $_ })
+$TargetApps = $TargetAppList -join ','
+$TargetAppDisplay = ($TargetAppList | ForEach-Object { $AppDisplayNames[$_] }) -join ', '
 
 function Write-Log {
   param([Parameter(Mandatory = $true)][string]$Message)
@@ -52,6 +80,12 @@ function New-CcSwitchImportUri {
         type = 'stdio'
         command = [System.IO.Path]::GetFullPath($FastCtxBinary)
         args = @('serve', '--enable-shell')
+        # Codex reads these two; the other applications ignore unknown keys. CC Switch keeps a
+        # single shared spec per server id and preserves it on re-import, so omitting them here
+        # would leave Codex without the timeouts that configure-fastctx.ps1 writes directly.
+        # Keep in step with the canonical Codex profile in configure-fastctx.ps1.
+        startup_timeout_sec = 120
+        tool_timeout_sec = 300
         env = $environment
       }
     }
@@ -91,7 +125,7 @@ if ($PreflightOnly) {
 }
 if ($VerifyOnly) {
   if ($available) {
-    Write-Log 'ccswitch:// is registered; the verified FastCtx import link targets all six MCP-capable CC Switch applications'
+    Write-Log "ccswitch:// is registered; the verified FastCtx import link targets: $TargetAppDisplay"
   } else {
     Write-Log 'ccswitch:// is not registered; Claude Code and Codex remain configured directly'
   }
@@ -108,5 +142,5 @@ if (-not $available) {
 }
 
 Start-Process -FilePath $uri
-Write-Log 'opened the official CC Switch import confirmation for Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes'
+Write-Log "opened the official CC Switch import confirmation for: $TargetAppDisplay"
 Write-Log 'review the displayed command, arguments, and environment, then confirm Import in CC Switch'

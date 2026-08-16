@@ -8,6 +8,7 @@ param(
   [string]$ClaudeCommand,
   [switch]$SkipClaudeCode,
   [switch]$SkipCcSwitch,
+  [string]$CcSwitchApps,
   [switch]$NoLaunchCcSwitch,
   [switch]$RequireCcSwitch,
   [switch]$ForceMcpRegistration,
@@ -445,6 +446,7 @@ function Invoke-CcSwitchIntegration {
     NativeHome = $ExpectedEnvironment.HOME
     CodexHome = $ExpectedEnvironment.CODEX_HOME
   }
+  if ($CcSwitchApps) { $parameters.Apps = $CcSwitchApps }
   if ($NoLaunchCcSwitch) { $parameters.NoLaunch = $true }
   if ($RequireCcSwitch) { $parameters.RequireCcSwitch = $true }
   if ($Preflight) { $parameters.PreflightOnly = $true }
